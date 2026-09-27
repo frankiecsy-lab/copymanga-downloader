@@ -1,5 +1,26 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-09-27 — 新功能：已下載漫畫「檢查更新」+ 自動下載新章節
+
+### 功能說明
+對已下載完成嘅漫畫一鍵「🔄 檢查更新」：逐部重新抓取網站章節列表，發現新章節即自動下載（連 CBZ/WEBP 後處理一齊做）；已有頁面/章節絕不重抓。
+
+### 實作
+- **`cm/db.py::downloaded_path_words()`**：搵出「已完全下載」嘅漫畫 — `status='done'`，或所有 tracked chapters 都 done（兩條件 UNION；同 GUI 綠行定義 `_is_downloaded` 一致）。
+- **`cm/engine.py` check_updates 模式**（`start(slugs, check_updates=True)`）：此模式下 `_process_comic` 步驟 1 由「首次先抓章節列表」改為「必定重新渲染 detail page」，經 `db.add_chapters()` 冪等合併 — 舊 done 章節保持狀態唔會重下，只有真正新嘅 row 以 pending 插入 → 再流入正常 pending-chapter 下載循環；順帶刷新 synopsis / serial_status。日誌顯示「共 N 章（新增 M）」。
+- **`app.py` GUI**：
+  - Row2 加藍色「🔄 檢查更新」按鈕（「重下(選取)」之前）：目標 = 全部已下載漫畫；engine thread 執行、可「停止下載」中斷、log + 「正在下載」panel live 進度。
+  - 右鍵選單（清單/圖格兩視圖）加「檢查更新(此部)」：單一作品同步到網站狀態。
+  - 新 `_run_is_update` flag：完成時 log 顯示「■ 更新檢查完成 — 所有新章節處理完畢。」而唔係「全部選取的漫畫下載完成。」
+
+### 行為細節 / 邊界情況
+- 新章節下載中途停止：該作保持 `status='done'`，下次檢查更新會再撈到、未完成章節自動重試。
+- 網站刪除咗某章：本地記錄/檔案保留（`add_chapters` 唔會刪已有 row）。
+- 無新增依賴；requirements.txt 不變。
+
+### 測試
+temp DB 自動化測試驗證：`downloaded_path_words()` 四種狀態識別（done / 部分下載 / 全新 / 全章 done 但 status 未設）、章節合併冪等性（舊章保持 done、新章 pending）、中斷後可再撈、Engine 簽名 — 全部通過；測試腳本已刪除。
+
 ## 2026-09-27 — 修復封面圖片完全不顯示（threading bug）
 
 ### Bug：所有縮圖/封面從頭到尾都冇顯示過

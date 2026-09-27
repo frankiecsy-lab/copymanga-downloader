@@ -262,6 +262,19 @@ def selected_path_words() -> list:
     return [r["path_word"] for r in rows]
 
 
+def downloaded_path_words() -> list:
+    """Path words of the comics that are fully on disk — same definition as the GUI's green row:
+    status 'done', OR every tracked chapter is done (covers comics finished before the
+    status field was set). Used by 檢查更新 to pick which comics get an update check."""
+    c = connect()
+    rows = c.execute(
+        "SELECT path_word FROM comics WHERE status='done' "
+        "UNION SELECT comic_path_word FROM chapters GROUP BY comic_path_word "
+        "HAVING COUNT(*) > 0 AND SUM(status='done') = COUNT(*)"
+    ).fetchall()
+    return [r["path_word"] for r in rows]
+
+
 def clear_all() -> None:
     """Wipe every comic, chapter and image row (used by the 'clear all' action)."""
     c = connect()

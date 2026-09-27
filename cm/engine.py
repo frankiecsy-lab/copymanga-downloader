@@ -6,7 +6,11 @@ through the state machine:
 Every unit of work is persisted to SQLite as it completes, and a stop flag is checked
 between every chapter AND between every image. Stopping just halts the loop; on the
 next run the worker re-reads the DB and skips anything already 'done' — so stopping
-mid-way and resuming never loses or duplicates work."""
+mid-way and resuming never loses or duplicates work.
+
+check_updates mode (start(slugs, check_updates=True)): for 檢查更新 — the detail page is
+re-rendered even for fully-downloaded comics, new chapters are merged in as 'pending',
+and only those get downloaded; existing pages/chapters are left untouched."""
 import os
 import re
 import threading
@@ -38,11 +42,14 @@ class Engine:
     def stop_requested(self):
         return self._stop.is_set()
 
-    def start(self, slugs: list):
+    def start(self, slugs: list, check_updates: bool = False):
+        """Start a download run. With check_updates=True the detail page is re-rendered for
+        EVERY comic (even ones already fully downloaded) so brand-new chapters on the site are
+        picked up and merged in; new chapters then flow through the normal pending-chapter loop."""
         if self.running:
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, args=(slugs,), daemon=True)
+        self._thread = threading.Thread(target=self._run, args=(slugs, check_updates), daemon=True)
         self.running = True
         self._thread.start()
 
@@ -58,7 +65,7 @@ class Engine:
         self._emit("log", message=msg)
 
     # -- main loop -----------------------------------------------------------
-    def _run(self, slugs):
+    def _run(self, slugs, check_updates=False):
         db.init()
         session = make_session()
         try:
@@ -74,7 +81,8 @@ class Engine:
                     self._log(f"▶ {name}")
                     self._emit("downloading", name=name, slug=slug)   # -> GUI "正在下載" panel
                     try:
-                        self._process_comic(br, session, slug, name, author, comic.get("serial_status") or "")
+                        self._process_comic(br, session, slug, name, author,
+                                            comic.get("serial_status") or "", check_updates)
                     except Exception as e:
                         db.set_comic_status(slug, "error")
                         self._log(f"  ✗ {name} 出錯：{e}")
@@ -82,7 +90,7 @@ class Engine:
             self.running = False
             self._emit("all_done", stopped=self._stop.is_set())
 
-    def _process_comic(self, br, session, slug, name, author="", serial_status=""):
+    def _process_comic(self, br, session, slug, name, author="", serial_status="", check_updates=False):
         # Folder naming: new downloads go under a top-level status folder —
         #   <StatusLabel>/<Name> - <Author>/...  (e.g. 連載中/某漫 - 作者/)
         # A comic that already has files on disk keeps its EXISTING folder (relative to
@@ -103,15 +111,21 @@ class Engine:
         # 0) retry any chapters that errored on a previous run (no re-render needed)
         db.reset_error_chapters(slug)
 
-        # 1) chapters + synopsis + status (only if we don't have the chapter list yet)
+        # 1) chapters + synopsis + status. First run always renders; in update-check mode we ALWAYS
+        # re-render so brand-new chapters on the site are picked up — add_chapters is an idempotent
+        # upsert: existing done chapters keep their status (never re-downloaded), only genuinely new
+        # rows land as 'pending' and flow through the normal download loop below.
         existing = db.all_chapters(slug)
-        if not existing:
-            self._log(f"  載入章節列表…")
+        if not existing or check_updates:
+            self._log("  檢查新章節…" if check_updates else "  載入章節列表…")
             detail = br.render_detail(slug)
+            prev = len(existing)
             db.upsert_comic(slug, synopsis=detail.get("synopsis"), serial_status=detail.get("serial_status"))
             n = db.add_chapters(slug, detail["chapters"])
-            db.set_comic_status(slug, "chapters_done")
-            self._log(f"  共 {n} 章")
+            if not existing:
+                db.set_comic_status(slug, "chapters_done")
+            added = max(0, n - prev)
+            self._log(f"  共 {n} 章（新增 {added}）" if check_updates else f"  共 {n} 章")
 
         # 2) each pending chapter (each one transitions to done/error, so no infinite loop)
         while True:

@@ -2,7 +2,7 @@
 
 Layout:
   Row1: [search] [狀態▾] [★只看收藏] [輸出 ☑CBZ ☑WEBP]   [🌙主題][開啟資料夾][停止下載][開始下載]
-  Row2: [更新清單][停止更新][清空並重抓] | [全選(可見)][取消全選] | [重下(選取)][清單清除][下載清除]  [▦圖格視圖]
+  Row2: [更新清單][停止更新][清空並重抓] | [全選(可見)][取消全選] | [檢查更新][重下(選取)][清單清除][下載清除]  [▦圖格視圖]
   [📂更改位置 (dark btn) ............ path]
   +----------------------------------+---------------------------+
   | comic list (tree OR cover grid)  | detail sidebar (~30%)    |
@@ -136,6 +136,7 @@ class App:
         self._sort_col = None      # column id currently sorted by (None = DB default order)
         self._sort_reverse = False  # True = descending, False = ascending
         self._active_slugs = []    # slugs in the current download run (for the live panel)
+        self._run_is_update = False  # True while the active engine run is a 檢查更新 pass
         self._current_name = ""    # comic the engine is processing right now
         self._dl_visible = False   # whether the "正在下載" panel is currently packed
 
@@ -324,7 +325,10 @@ class App:
         ttk.Button(bar2, text="取消全選", command=lambda: self._set_all_visible(False)).pack(side="left", padx=(6, 14))
 
         ttk.Separator(bar2, orient="vertical").pack(side="left", fill="y", pady=2)
-        ttk.Button(bar2, text="重下(選取)", command=self._redownload_selected).pack(side="left")
+        # 檢查更新: re-render the chapter list of every fully-downloaded comic and download any new chapters
+        self.update_btn = ttk.Button(bar2, text="🔄 檢查更新", style="Accent.TButton", command=self._check_updates)
+        self.update_btn.pack(side="left")
+        ttk.Button(bar2, text="重下(選取)", command=self._redownload_selected).pack(side="left", padx=(6, 0))
         ttk.Button(bar2, text="清單清除", style="Danger.TButton", command=self._clear_list).pack(side="left", padx=(6, 0))
         ttk.Button(bar2, text="下載清除", style="Danger.TButton", command=self._clear_downloads).pack(side="left", padx=6)
 
@@ -908,6 +912,7 @@ class App:
                     activebackground=c["accent"], activeforeground="#ffffff")
         label = "取消勾選下載" if r.get("selected") else "勾選下載"
         m.add_command(label=label, command=lambda: self._toggle_grid_sel(slug))
+        m.add_command(label="檢查更新(此部)", command=lambda: self._check_updates_one(slug))
         m.add_command(label="重新下載此漫畫", command=lambda: self._redownload_one(slug))
         m.add_command(label="開啟原連結", command=lambda: webbrowser.open(f"{config.BASE_URL}/comic/{slug}"))
         try:
@@ -1106,6 +1111,7 @@ class App:
             return
         self.stop_btn.configure(state="normal")
         self.start_btn.configure(state="disabled")
+        self._run_is_update = False
         self._append_log(f"開始下載 {len(slugs)} 部…（隨時可「停止下載」，進度會保存）")
         self._active_slugs = list(slugs)
         self._current_name = ""
@@ -1121,7 +1127,12 @@ class App:
     def _on_all_done(self, stopped):
         self.stop_btn.configure(state="disabled")
         self.start_btn.configure(state="normal")
-        msg = "■ 已停止。" if stopped else "■ 全部選取的漫畫下載完成。"
+        if stopped:
+            msg = "■ 已停止。"
+        elif self._run_is_update:
+            msg = "■ 更新檢查完成 — 所有新章節處理完畢。"
+        else:
+            msg = "■ 全部選取的漫畫下載完成。"
         self._append_log(msg)
         self._refresh_progress()
 
@@ -1192,6 +1203,43 @@ class App:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    # -------------------------------------------------------- check updates --
+    def _check_updates(self):
+        """Check EVERY fully-downloaded comic for new chapters on the site; download any found.
+
+        The engine re-renders each comic's detail page and merges the chapter list (idempotent —
+        existing done chapters are never re-fetched), then downloads only the genuinely new ones."""
+        if self.engine.running:
+            messagebox.showwarning("檢查更新", "下載進行中 — 請先「停止下載」。")
+            return
+        slugs = db.downloaded_path_words()
+        if not slugs:
+            messagebox.showinfo("檢查更新", "暫時未有任何已下載完成的漫畫。")
+            return
+        self.stop_btn.configure(state="normal")
+        self.start_btn.configure(state="disabled")
+        self._run_is_update = True
+        self._append_log(f"開始檢查 {len(slugs)} 部已下載漫畫的更新…（逐部重抓章節列表，發現新章節會自動下載；可「停止下載」中斷）")
+        self._active_slugs = list(slugs)
+        self._current_name = ""
+        self._last_dl_refresh = 0.0   # force an immediate panel refresh on the next tick
+        self.engine.start(slugs, check_updates=True)
+
+    def _check_updates_one(self, pw):
+        """Per-comic version (context menu): sync this one comic with the site and download new chapters."""
+        if self.engine.running:
+            messagebox.showwarning("檢查更新", "下載進行中 — 請先「停止下載」。")
+            return
+        name = (db.get_comic(pw) or {}).get("name") or pw
+        self.stop_btn.configure(state="normal")
+        self.start_btn.configure(state="disabled")
+        self._run_is_update = True
+        self._append_log(f"檢查更新：{name}…（重抓章節列表，新章節會自動下載）")
+        self._active_slugs = [pw]
+        self._current_name = ""
+        self._last_dl_refresh = 0.0
+        self.engine.start([pw], check_updates=True)
+
     # --------------------------------------------------------- re-download --
     def _redownload_selected(self):
         """Fully re-download every ✓-selected comic (reset state first; keeps existing folders)."""
@@ -1207,6 +1255,7 @@ class App:
         self._reload_tree()
         self.stop_btn.configure(state="normal")
         self.start_btn.configure(state="disabled")
+        self._run_is_update = False
         self._append_log(f"重新下載 {len(slugs)} 部…（會重抓全部頁面）")
         self._active_slugs = list(slugs)
         self.engine.start(slugs)
@@ -1220,6 +1269,7 @@ class App:
         self._reload_tree()
         self.stop_btn.configure(state="normal")
         self.start_btn.configure(state="disabled")
+        self._run_is_update = False
         self._append_log(f"重新下載：{name}…（會重抓全部頁面）")
         self._active_slugs = [pw]
         self.engine.start([pw])
@@ -1232,6 +1282,7 @@ class App:
         c = self._c
         m = tk.Menu(self.root, tearoff=0, bg=c["panel"], fg=c["fg"],
                     activebackground=c["accent"], activeforeground="#ffffff")
+        m.add_command(label="檢查更新(此部)", command=lambda: self._check_updates_one(pw))
         m.add_command(label="重新下載此漫畫", command=lambda: self._redownload_one(pw))
         m.add_command(label="開啟原連結", command=lambda: webbrowser.open(f"{config.BASE_URL}/comic/{pw}"))
         try:
