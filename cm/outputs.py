@@ -3,7 +3,8 @@
 After a chapter's pages are on disk, optionally produce extra outputs based on the
 user-selected OUTPUT checkboxes (persisted in DB meta "output_cbz" / "output_webp"):
 
-    CBZ   — zip the chapter's pages (in page order) into <comic_dir>/<chapter>.cbz
+    CBZ   — zip the chapter's pages (in page order) into <comic_dir>/<name>_<author>_vol_NN.cbz
+            (NN = the chapter's 1-based position in title order, e.g. vol_01, vol_02 …)
     WEBP  — convert any non-webp page files to .webp in place (DB paths updated)
 
 Both default ON. Older builds stored a single "output_mode" value ("CBZ"/"WEBP"/"BOTH"),
@@ -25,6 +26,23 @@ def _safe_name(name: str) -> str:
     name = (name or "").strip()
     name = re.sub(r'[\\/:*?"<>|]', "_", name).strip(" ._")
     return name[:80] or "chapter"
+
+
+def _clean(s: str) -> str:
+    """Sanitize one filename fragment; empty input stays empty (no fallback)."""
+    s = re.sub(r'[\\/:*?"<>|]', "_", (s or "").strip()).strip(" ._")
+    return s[:80]
+
+
+def _cbz_filename(slug, cid):
+    """'<name>_<author>_vol_NN.cbz' — NN is the chapter's 1-based position in title order."""
+    comic = db.get_comic(slug) or {}
+    name = _clean(comic.get("name")) or slug
+    author = _clean(comic.get("author"))
+    chapters = db.all_chapters(slug)
+    idx = next((i for i, ch in enumerate(chapters, 1) if ch["chapter_id"] == cid), None)
+    vol = f"vol_{idx:02d}" if idx else "vol_00"
+    return "_".join([name] + ([author] if author else []) + [vol]) + ".cbz"
 
 
 def _done_pages(slug, cid):
@@ -79,14 +97,22 @@ def _cbz_stale(cbz_path, pages):
 
 
 def ensure_cbz(slug, cid, dest_dir):
-    """Zip this chapter's pages into <comic_dir>/<chapter>.cbz.
+    """Zip this chapter's pages into <comic_dir>/<name>_<author>_vol_NN.cbz.
 
     Returns (path_or_None, rebuilt_bool)."""
     pages = _done_pages(slug, cid)
     if not pages:
         return None, False
-    cbz_path = os.path.join(os.path.dirname(dest_dir),
-                            _safe_name(os.path.basename(dest_dir)) + ".cbz")
+    comic_dir = os.path.dirname(dest_dir)
+    cbz_path = os.path.join(comic_dir, _cbz_filename(slug, cid))
+    # drop a file recorded under an older naming scheme (only inside this comic's folder)
+    old_cbz = (db.get_chapter(slug, cid) or {}).get("cbz_path")
+    if old_cbz and os.path.abspath(old_cbz) != os.path.abspath(cbz_path) \
+            and os.path.dirname(os.path.abspath(old_cbz)) == os.path.abspath(comic_dir):
+        try:
+            os.remove(old_cbz)
+        except OSError:
+            pass
     if not _cbz_stale(cbz_path, pages):
         return cbz_path, False
     with zipfile.ZipFile(cbz_path, "w", zipfile.ZIP_STORED) as z:

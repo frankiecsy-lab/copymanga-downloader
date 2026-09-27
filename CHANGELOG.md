@@ -1,5 +1,23 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-09-27 — CBZ 檔案命名改為「漫畫名字_作者_vol_NN」格式
+
+### 功能說明
+每章嘅 CBZ 檔名由舊嘅「章節標題.cbz」改做 **`<漫畫名>_<作者>_vol_NN.cbz`**（NN = 該章按標題排序嘅序號，兩位數起：vol_01、vol_02 … vol_10）。例：`魔都精兵的奴隸_竹村洋平, タカヒロ_vol_01.cbz`。
+
+### 實作
+- **`cm/outputs.py::_cbz_filename(slug, cid)`**（新）：由 DB `comics.name` / `comics.author` 組裝檔名；章節序號 = 該章喺 `db.all_chapters()`（ORDER BY title，同 engine 下載順序一致）嘅 1-based 位置。作者為空時自動略過嗰段（唔會留雙底線：`無作者漫_vol_01.cbz`）；漫畫名缺失時 fallback 去 path_word。
+- **`cm/outputs.py::_clean()`**（新）：檔名片段消毒（同舊 `_safe_name` 規則，但空值保持空、唔會 fallback 做 "chapter"）。
+- **`ensure_cbz()`**：改用新檔名；另加舊檔清理 — 若 DB `chapters.cbz_path` 指向同一漫畫資料夾入面嘅舊命名檔案（例如升級前下載嘅 `<章節標題>.cbz`），重建時自動刪除，確保每章只有一份 CBZ。冪等性不變：新檔存在且比所有頁面新就跳過。
+
+### 行為細節 / 邊界情況
+- vol 編號跟隨標題排序（同 app 其他嘅章節順序一致）；「檢查更新」加入新章後，新章按排序位置取得自己嘅 vol_NN，舊章編號唔變（除非新章排喺前面）。
+- 100+ 章自然擴為三位數（vol_100），唔會截斷。
+- 無新增依賴；requirements.txt 不變。
+
+### 測試
+temp DB + temp 資料夾自動化測試驗證：有作者（含逗號多作者）/ 無作者兩種命名、vol_01–vol_03 序號、冪等跳過重建、舊命名 cbz 自動清理、`ensure_outputs()` 端到端 — 全部通過；臨時腳本同 temp 資料夾已刪除。
+
 ## 2026-09-27 — 維護：清理臨時檔 + 重燒 EXE + build.bat 數據保護加固
 
 ### 清理
@@ -34,7 +52,6 @@
 
 ### 測試
 temp DB + withdrawn window GUI smoke test：初始 placeholder、大圖 native scrollregion、小圖置中＋scrollbar 隱藏、placeholder 切返、主題切換、端到端（fake network → `_show_detail` → worker fetch → event dispatch → 顯示，確認無 memory cache、有 disk cache）— 6/6 通過；測試腳本已刪除。
-
 ## 2026-09-27 — 新功能：已下載漫畫「檢查更新」+ 自動下載新章節
 
 ### 功能說明
