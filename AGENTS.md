@@ -65,4 +65,14 @@
 * **【正確資源】**：https://futunn.com
 * **【備註說明】**：此網址**僅作為輔助參考與功能對照用途**。當開發 HKQuant 相關功能遇到邏輯不清晰（例如：搶行情權限、特定 K 線參數、到價提醒回調）時，可參閱此官方文件的底層邏輯進行代碼設計。
 
+### 📌 踩坑記錄（構建與打包）
+
+#### 1. PyInstaller 會 wipe 成個輸出目錄
+* **【問題/限制】**：`PyInstaller`（one-dir / COLLECT）**每次 build 都會刪除整個 `dist\MangaCopy\` 資料夾** — 包括放喺入面嘅 portable user data（`data\mangacopy.db`、`downloads\` 下載咗嘅漫畫）。2026-09-27 重燒時 frozen DB 即被清走。
+* **【解決/避坑方案】**：`build.bat` 已加固 — build 前自動將 `data\` + `downloads\` move 去 `dist\_userdata\`，build 後（包括失敗路徑）move 返；同碟 move = instant rename，幾 GB 都唔會拖慢。**日後手動重燒或改 spec 時，務必先保護呢兩個目錄**（或者乾脆直接跑 `build.bat`）。
+
+#### 2. Windows batch 檔必須用 CRLF 行尾
+* **【問題/限制】**：`.bat` 檔案若係 LF（Unix）行尾，cmd.exe 會搵唔到 label — `call :label` / `goto :label` **靜默失敗**、執行直接跳過該行（無明顯錯誤訊息），極難排查。
+* **【解決/避坑方案】**：用編輯器/AI 建立或修改 `.bat` 後，必須確認行尾係 CRLF；如唔係用 `sed -i 's/$/\r/' file.bat` 轉換。改動 label/goto 邏輯後要實際執行一次該路徑驗證（例如故意觸發失敗分支）。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*

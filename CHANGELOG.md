@@ -1,5 +1,25 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-09-27 — 維護：清理臨時檔 + 重燒 EXE + build.bat 數據保護加固
+
+### 清理
+- 刪除 `__pycache__/`、`cm/__pycache__/`、PyInstaller 中間目錄 `build/`（39MB）、縮圖快取 `data/thumbs/`（481 張、36MB，純 cache 可隨時重生成）。
+- 刪除重複 build 資料夾 `dist/MangaCopy - 複製`（939MB；已用 md5 驗證其 DB 同主 build 完全一致、downloads 為空 — 純重複檔）。
+
+### EXE 重燒
+- `build.bat` 重建：PyInstaller one-dir + Chromium v1243（Chrome for Testing 153.0.8010.12）裝入 `dist\MangaCopy\playwright-browsers\`。
+- Smoke test：frozen exe 啟動後穩定運行 12 秒無 crash（進程存活、~78MB），然後 kill — 確認打包完整可用。
+- 合併遠端新功能「full-res 原圖預覽」（33cf7aa）後再跑一次 `build.bat` 重燒 — 最終 EXE 包含該功能；呢次運行同時端到端驗證咗加固版 build.bat 嘅 staging/restore 流程。
+
+### 踩坑與修復（重要）
+- **PyInstaller 每次 build 會 wipe 成個 `dist\MangaCopy` 輸出目錄** — 連 portable app 自己嘅 `data\mangacopy.db`、`downloads\` 都一齊刪。本次重燒即中招：frozen DB 被清走；幸而當時 chapters=0（從未下載過任何章節）、kv 無自訂下載路徑，用較新嘅 dev 端 DB（喺 git）還原，零損失。
+- **build.bat 加固**：build 前自動將 `data\` + `downloads\` move 去 `dist\_userdata\`，build 後（包括失敗路徑）move 返 — 同碟 move = instant rename，幾 GB comics 都唔會拖慢；exe 運行緊鎖檔時即時報錯中止。
+- **batch 行尾坑**：`.bat` 用 LF 行尾時 cmd.exe 會搵唔到 label — `call :label` 靜默失敗、執行直接跳過（無明顯錯誤），極難排查。已轉 CRLF 並用同結構最小測試腳本驗證 restore 路徑通過後刪除。
+- `.gitignore` 新增 `data/thumbs/`，防止縮圖快取被 `git add .` 掃進 repo。
+
+### 狀態
+- `dist\MangaCopy\` 即開即用：新 exe + `_internal`（211MB）+ Chromium（707MB）+ data/DB（md5 同 dev 一致）。
+
 ## 2026-09-27 — 右欄預覽改原圖顯示（full-res scrollable viewer）
 
 ### 功能說明
