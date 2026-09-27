@@ -1,0 +1,12 @@
+# MangaCopy downloader — Python dependencies (Python 3.10+ recommended)
+#
+# To run from source:   pip install -r requirements.txt
+#                       python app.py
+# To build the EXE:     see build.bat  (or: pyinstaller MangaCopy.spec --noconfirm)
+
+requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+Pillow>=10.0            # WEBP output conversion (cm/outputs.py)
+playwright==1.63.0        # pinned — the bundled Node driver + Chromium must match this version
+pyinstaller>=6.0         # only needed to build the EXE, not to run from source
