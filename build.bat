@@ -58,7 +58,11 @@ goto :eof
 
 :err_move
 echo.
-echo ERROR: could not stage user data - is MangaCopy.exe still running? Close it and retry.
+echo ERROR: could not stage user data (Access denied). Likely causes:
+echo   1) MangaCopy.exe is still running - close it and retry.
+echo   2) Windows Search indexing (sihost.exe) holds the folder open - run:
+echo        taskkill /f /im sihost.exe
+echo      then retry the build.
 exit /b 1
 
 :err

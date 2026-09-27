@@ -1,5 +1,17 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-09-27 — 維護：重燒 EXE ＋ build.bat 錯誤訊息加固（SearchIndexer lock 踩坑）
+
+### 背景
+重燒 EXE 時 `build.bat` step 1（staging user data）move `dist\MangaCopy\downloads` 報 **Access is denied**，但 MangaCopy.exe 根本冇運行。排查後確認元兇係 Windows Search 嘅 per-user 索引進程 `sihost.exe`：佢索引 webp 檔案時 hold 住 `downloads` 目錄嘅 open handle，令該目錄本身同直接子項無法 rename/move（更深層子目錄卻正常），極易誤判做「EXE 仲開緊」。
+
+### 修改
+- **build.bat**：`:err_move` 錯誤訊息由「is MangaCopy.exe still running?」擴充為兩個可能原因（EXE 運行中 / sihost.exe hold 住資料夾）＋ 一鍵解鎖指令 `taskkill /f /im sihost.exe`。純文字改動、無邏輯變更，CRLF 行尾已驗證。
+- **AGENTS.md 知識庫**：踩坑記錄新增第 3 條 — 完整排查路徑（tasklist → Python `os.rename` 分層測試定位 lock 層級 → PowerShell COM 枚举 Explorer 視窗位置 → sihost/Defender）。
+
+### 驗證
+`taskkill /f /im sihost.exe` 後重跑 build.bat，5 步全部成功：PyInstaller one-dir 重建 ＋ Chromium 153.0.8010.12 (v1243) 裝入 portable 資料夾；user data 完整還原（`data\mangacopy.db` 15.7MB ＋ `downloads\` 2947 個 webp），staging 目錄自動清理。
+
 ## 2026-09-27 — CBZ 命名微調（多作者只取第一位）＋ 下載列表管理（清空／個別移除）
 
 ### 1. CBZ 檔名：多位作者只取第一位

@@ -75,4 +75,9 @@
 * **【問題/限制】**：`.bat` 檔案若係 LF（Unix）行尾，cmd.exe 會搵唔到 label — `call :label` / `goto :label` **靜默失敗**、執行直接跳過該行（無明顯錯誤訊息），極難排查。
 * **【解決/避坑方案】**：用編輯器/AI 建立或修改 `.bat` 後，必須確認行尾係 CRLF；如唔係用 `sed -i 's/$/\r/' file.bat` 轉換。改動 label/goto 邏輯後要實際執行一次該路徑驗證（例如故意觸發失敗分支）。
 
+#### 3. Windows SearchIndexer (sihost.exe) lock downloads 目錄令 build 失敗
+* **【問題/限制】**：`build.bat` step 1 staging user data 時 `move dist\MangaCopy\downloads → dist\_userdata\` 可能報 **Access is denied** — 即使 MangaCopy.exe 根本冇運行。元兇係 Windows Search 嘅 per-user 索引進程 `sihost.exe`：佢枚举/索引 webp 檔案時會 hold 住 `downloads` 目錄嘅 open handle，令該目錄本身同埋直接子項無法 rename/move（更深層子目錄操作卻正常），極易誤判做「EXE 仲開緊」。2026-09-27 重燒 EXE 時踩到。
+* **【正確資源】**：[Microsoft Docs: Restart Manager API](https://learn.microsoft.com/en-us/windows/win32/api/rstrtmgr/ne-rstrtmgr-rmtarget_resource)（查詢「邊個程序開緊某目錄樹下檔案」嘅標準工具；注意 Insider build 上 rstrtmgr.dll 可能壞咗，唔好依賴）。
+* **【解決/避坑方案】**：`taskkill /f /im sihost.exe` 後重跑 `build.bat`（sihost 會由 SearchIndexer 服務自動重生，對系統無影響）。排查順序：① `tasklist` 確認 EXE 冇運行 → ② 用 Python `os.rename` 分別測試頂層目錄 vs 子目錄，定位 lock 喺邊一層 → ③ PowerShell COM（`(New-Object -ComObject Shell.Application).Windows()` + `.LocationURL`）枚举 Explorer 視窗位置排除 Explorer → ④ 都唔係就係 sihost / Defender 實時掃描。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*
