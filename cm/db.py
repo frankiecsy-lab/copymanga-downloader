@@ -138,6 +138,13 @@ def set_selected(path_word: str, selected: bool) -> None:
     c.commit()
 
 
+def clear_selection() -> None:
+    """Deselect every comic — empties the whole download list (not just visible rows)."""
+    c = connect()
+    c.execute("UPDATE comics SET selected=0")
+    c.commit()
+
+
 def set_favorite(path_word: str, fav: bool) -> None:
     """Star / un-star a comic (收藏)."""
     c = connect()

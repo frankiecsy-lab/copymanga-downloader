@@ -35,10 +35,13 @@ def _clean(s: str) -> str:
 
 
 def _cbz_filename(slug, cid):
-    """'<name>_<author>_vol_NN.cbz' — NN is the chapter's 1-based position in title order."""
+    """'<name>_<author>_vol_NN.cbz' — NN is the chapter's 1-based position in title order.
+
+    When several authors are listed ("稻垣理一郎, Boichi") only the FIRST one is used."""
     comic = db.get_comic(slug) or {}
     name = _clean(comic.get("name")) or slug
-    author = _clean(comic.get("author"))
+    first_author = re.split(r"[,，]", comic.get("author") or "", 1)[0]
+    author = _clean(first_author)
     chapters = db.all_chapters(slug)
     idx = next((i for i, ch in enumerate(chapters, 1) if ch["chapter_id"] == cid), None)
     vol = f"vol_{idx:02d}" if idx else "vol_00"

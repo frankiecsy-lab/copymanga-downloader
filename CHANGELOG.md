@@ -1,5 +1,19 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-09-27 — CBZ 命名微調（多作者只取第一位）＋ 下載列表管理（清空／個別移除）
+
+### 1. CBZ 檔名：多位作者只取第一位
+- 之前 `author` 欄整串入檔名，例如 `Dr.STONE_稻垣理一郎, Boichi_vol_01.cbz`；而家按逗號（`,` 或全角 `，`）切開**只取第一位** → **`Dr.STONE_稻垣理一郎_vol_01.cbz`**。單一作者不受影響。
+- 實作：`cm/outputs.py::_cbz_filename()` — `re.split(r"[,，]", author, 1)[0]` 先切再 `_clean()`。
+
+### 2. 下載列表（✓ 勾選隊列）管理
+- **清空**：Row2 新增「清空下載列表」按鈕（跟喺「取消全選」之後）— 取消**全部**漫畫嘅勾選，包括被篩選隱藏咗嘅行（「取消全選」只影響可見行）。非破壞性操作，唔會刪任何檔案。
+- **個別移除**：清單視圖右鍵選單新增「從下載列表移除」（只喺該部已勾選時顯示）；圖格視圖原本已有「取消勾選下載」。
+- 實作：`cm/db.py::clear_selection()`（`UPDATE comics SET selected=0`）；`app.py::_clear_download_list()` / `_remove_from_queue(slug)` — 改 DB 後即時同步 tree ✓ 欄／card badge 同底部計數，唔使重載。
+
+### 測試
+temp-DB + withdrawn-window GUI smoke test：CBZ 命名三個 case（ASCII 逗號多作者 → `Dr.STONE_稻垣理一郎_vol_01.cbz`、全角逗號、單作者不變）✓；下載列表 — 勾選 2/3 部 → 個別移除後 DB/tree 欄/計數全部同步 ✓ → 清空後 `selected_path_words()==[]`、所有行 ✓ 消失、計數 0 ✓；右鍵選單對已勾選行正常建立 ✓。臨時腳本同 temp 資料夾已刪除。
+
 ## 2026-09-27 — 修復：切換主題/換漫畫時 GUI 卡死（TclError: image "pyimageN" doesn't exist）
 
 ### Bug：右欄顯示過原圖封面後，按 🌙 切換主題或點選其他漫畫，GUI 無反應（似卡死），console 出 `TclError: image "pyimage8" doesn't exist`

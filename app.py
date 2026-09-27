@@ -2,7 +2,7 @@
 
 Layout:
   Row1: [search] [狀態▾] [★只看收藏] [輸出 ☑CBZ ☑WEBP]   [🌙主題][開啟資料夾][停止下載][開始下載]
-  Row2: [更新清單][停止更新][清空並重抓] | [全選(可見)][取消全選] | [檢查更新][重下(選取)][清單清除][下載清除]  [▦圖格視圖]
+  Row2: [更新清單][停止更新][清空並重抓] | [全選(可見)][取消全選][清空下載列表] | [檢查更新][重下(選取)][清單清除][下載清除]  [▦圖格視圖]
   [📂更改位置 (dark btn) ............ path]
   +----------------------------------+---------------------------+
   | comic list (tree OR cover grid)  | detail sidebar (~30%)    |
@@ -328,7 +328,9 @@ class App:
 
         ttk.Separator(bar2, orient="vertical").pack(side="left", fill="y", pady=2)
         ttk.Button(bar2, text="全選(可見)", command=lambda: self._set_all_visible(True)).pack(side="left")
-        ttk.Button(bar2, text="取消全選", command=lambda: self._set_all_visible(False)).pack(side="left", padx=(6, 14))
+        ttk.Button(bar2, text="取消全選", command=lambda: self._set_all_visible(False)).pack(side="left", padx=6)
+        # empties the WHOLE download list (incl. rows hidden by filters); per-item removal is in the right-click menu
+        ttk.Button(bar2, text="清空下載列表", command=self._clear_download_list).pack(side="left", padx=(0, 14))
 
         ttk.Separator(bar2, orient="vertical").pack(side="left", fill="y", pady=2)
         # 檢查更新: re-render the chapter list of every fully-downloaded comic and download any new chapters
@@ -836,6 +838,35 @@ class App:
                     d["sel"].configure(text="✓" if select else "",
                                        bg="#16a34a" if select else self._c["panel"],
                                        fg="white" if select else self._c["muted"])
+        self._update_count()
+
+    def _clear_download_list(self):
+        """Deselect every comic — empties the whole download list (incl. rows hidden by filters)."""
+        db.clear_selection()
+        for r in (self._rows or []):
+            r["selected"] = False
+        if self._view == "list":
+            for iid in self.tree.get_children():
+                vals = list(self.tree.item(iid, "values")); vals[0] = ""
+                self.tree.item(iid, values=vals)
+        else:
+            for d in self._grid_cards.values():
+                d["sel"].configure(text="", bg=self._c["panel"], fg=self._c["muted"])
+        self._update_count()
+
+    def _remove_from_queue(self, slug):
+        """Remove one comic from the download list (right-click menu item)."""
+        db.set_selected(slug, False)
+        self._mark_row_selected(slug, False)
+        if self._view == "list":
+            iid = next((i for i, s in self._iid_to_slug.items() if s == slug), None)
+            if iid:
+                vals = list(self.tree.item(iid, "values")); vals[0] = ""
+                self.tree.item(iid, values=vals)
+        else:
+            d = self._grid_cards.get(slug)
+            if d:
+                d["sel"].configure(text="", bg=self._c["panel"], fg=self._c["muted"])
         self._update_count()
 
     # ------------------------------------------------------------- grid view --
@@ -1360,6 +1391,8 @@ class App:
         c = self._c
         m = tk.Menu(self.root, tearoff=0, bg=c["panel"], fg=c["fg"],
                     activebackground=c["accent"], activeforeground="#ffffff")
+        if (db.get_comic(pw) or {}).get("selected"):
+            m.add_command(label="從下載列表移除", command=lambda: self._remove_from_queue(pw))
         m.add_command(label="檢查更新(此部)", command=lambda: self._check_updates_one(pw))
         m.add_command(label="重新下載此漫畫", command=lambda: self._redownload_one(pw))
         m.add_command(label="開啟原連結", command=lambda: webbrowser.open(f"{config.BASE_URL}/comic/{pw}"))
