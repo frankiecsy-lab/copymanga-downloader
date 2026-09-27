@@ -1,6 +1,6 @@
 # 更新日誌 (CHANGELOG)
 
-## 2026-09-28 — 右欄預覽改原圖顯示（full-res scrollable viewer）
+## 2026-09-27 — 右欄預覽改原圖顯示（full-res scrollable viewer）
 
 ### 功能說明
 右欄詳情封面由「縮到 520×680 再顯示」改為**原圖原生像素顯示**：大圖可經 scroll bar / 滑鼠 wheel 拖動瀏覽，細圖自動置中。
