@@ -1,5 +1,20 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-09-28 — 右欄預覽改原圖顯示（full-res scrollable viewer）
+
+### 功能說明
+右欄詳情封面由「縮到 520×680 再顯示」改為**原圖原生像素顯示**：大圖可經 scroll bar / 滑鼠 wheel 拖動瀏覽，細圖自動置中。
+
+### 實作（全部 `app.py`）
+- **新 cover viewer**：placeholder label（載入中／無封面／失敗提示）+ `tk.Canvas` + 雙向 scrollbar；原圖以 native size 放喺 canvas window 入面，`scrollregion` 跟隨圖片實際尺寸。
+- **`_load_thumb` resize policy**：只有 detail 尺寸（`DETAIL_W=520`）跳過 `img.thumbnail()` — 即右欄拿到嘅係原圖；grid/清單縮圖照舊縮到 138px。
+- **RAM 控制**：full-res PhotoImage **唔入** `thumb_cache`（一張 1587×2494 RGB ≈ 10MB，累積會爆）；disk cache（`data/thumbs/*.jpg`）保留 — 原圖只下載一次，之後由磁碟重讀。
+- 小於視口嘅封面自動置中；某軸冇 overflow 時該 scrollbar 隱藏（ttk.Scrollbar 唔支援 `-state`，用 pack/forget 切換）。
+- 主題切換（light/dark）會重新上色 viewer 背景。
+
+### 測試
+temp DB + withdrawn window GUI smoke test：初始 placeholder、大圖 native scrollregion、小圖置中＋scrollbar 隱藏、placeholder 切返、主題切換、端到端（fake network → `_show_detail` → worker fetch → event dispatch → 顯示，確認無 memory cache、有 disk cache）— 6/6 通過；測試腳本已刪除。
+
 ## 2026-09-27 — 新功能：已下載漫畫「檢查更新」+ 自動下載新章節
 
 ### 功能說明

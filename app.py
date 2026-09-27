@@ -6,7 +6,7 @@ Layout:
   [📂更改位置 (dark btn) ............ path]
   +----------------------------------+---------------------------+
   | comic list (tree OR cover grid)  | detail sidebar (~30%)    |
-  |  ✓ ★ name author 連載 進度 狀態 |  <thumbnail>             |
+  |  ✓ ★ name author 連載 進度 狀態 |  <cover 原圖, scrollable>|
   +----------------------------------+---------------------------+
   [統計: full-width collection stats strip]
   [====progress====] shown/selected   (log)
@@ -61,7 +61,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cm import config, db, listing  # noqa: E402
 from cm.engine import Engine        # noqa: E402
 
-# Detail-pane cover size (right pane is ~30% of window width; image shown at native pixels).
+# Detail-pane cover key size (right pane is ~30% of window width). The cover itself is shown at
+# NATIVE resolution inside a scrollable viewer — DETAIL_W/DETAIL_H only identify the detail fetch.
 DETAIL_W, DETAIL_H = 520, 680
 
 
@@ -230,6 +231,11 @@ class App:
                 lbl.configure(foreground=key)
         for w in (getattr(self, "grid_box", None), getattr(self, "_grid_canvas", None),
                   getattr(self, "_grid_inner", None)):
+            if w is not None:
+                w.configure(bg=c["bg"])
+        # detail-pane cover viewer (placeholder box + scrollable canvas + inner image label)
+        for w in (getattr(self, "detail_img_box", None), getattr(self, "_detail_canvas", None),
+                  getattr(self, "_detail_img_lbl", None)):
             if w is not None:
                 w.configure(bg=c["bg"])
         tree = getattr(self, "tree", None)
@@ -405,8 +411,24 @@ class App:
         # --- right: detail pane (~30% of the window; the list keeps ~70%) ---
         right = ttk.Frame(mid, relief="sunken", borderwidth=1, width=300)   # initial size; sash auto-sets 70/30
         mid.add(right, weight=0)
-        self.detail_img_label = ttk.Label(right, text="(請選取一部漫畫)", anchor="center")
-        self.detail_img_label.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        # Cover viewer: a placeholder label while loading / when there's no cover; once the full-res
+        # original lands it is shown at NATIVE pixels (no downscale) inside a scrollable canvas so big
+        # covers can be panned with the scrollbars or the mouse wheel.
+        self.detail_img_box = tk.Frame(right, bg=c["bg"])
+        self.detail_img_box.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        self._detail_ph = ttk.Label(self.detail_img_box, text="(請選取一部漫畫)", anchor="center")
+        self._detail_ph.pack(fill="both", expand=True)
+        self._detail_canvas = tk.Canvas(self.detail_img_box, highlightthickness=0, borderwidth=0, bg=c["bg"])
+        self._dimg_vsb = ttk.Scrollbar(self.detail_img_box, orient="vertical", command=self._detail_canvas.yview)
+        self._dimg_hsb = ttk.Scrollbar(self.detail_img_box, orient="horizontal", command=self._detail_canvas.xview)
+        self._detail_canvas.configure(yscrollcommand=self._dimg_vsb.set, xscrollcommand=self._dimg_hsb.set)
+        self._detail_img_lbl = tk.Label(self._detail_canvas, bg=c["bg"], bd=0)
+        self._dimg_win = self._detail_canvas.create_window((0, 0), window=self._detail_img_lbl, anchor="nw")
+        self._detail_img_lbl.bind("<Configure>", self._on_detail_img_configure)
+        self._detail_canvas.bind("<Configure>", self._on_detail_img_configure)
+        self._detail_canvas.bind(
+            "<MouseWheel>", lambda e: self._detail_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        self._detail_img_shown = False   # whether the canvas (vs the placeholder) is currently packed
         self._detail_title_lbl = ttk.Label(right, font=("Segoe UI", 12, "bold"), wraplength=276)
         self.detail_title = tk.StringVar(value="")
         self._detail_title_lbl.configure(textvariable=self.detail_title)
@@ -499,6 +521,31 @@ class App:
         """Keep the detail title's wraplength in sync with the pane's actual width."""
         if event.width > 60:
             self._detail_title_lbl.configure(wraplength=event.width - 24)
+
+    def _on_detail_img_configure(self, event=None):
+        """Keep the cover viewer's scrollregion in sync; center a cover that's smaller than the
+        viewport and show/hide each scrollbar only when its axis actually overflows."""
+        cv = self._detail_canvas
+        vw, vh = cv.winfo_width(), cv.winfo_height()
+        if vw < 10 or vh < 10:
+            return
+        bb = cv.bbox("all")
+        if not bb:
+            return
+        cv.configure(scrollregion=bb)
+        win_bb = cv.bbox(self._dimg_win)
+        if win_bb:
+            x = max(0, (vw - win_bb[2]) // 2)
+            y = max(0, (vh - win_bb[3]) // 2)
+            cx, cy = cv.coords(self._dimg_win)[:2]
+            if int(cx) != x or int(cy) != y:
+                cv.coords(self._dimg_win, x, y)
+        want_v, have_v = bb[1] + bb[3] > vh, bool(self._dimg_vsb.winfo_manager())
+        if want_v != have_v:
+            self._dimg_vsb.pack(side="right", fill="y") if want_v else self._dimg_vsb.pack_forget()
+        want_h, have_h = bb[0] + bb[2] > vw, bool(self._dimg_hsb.winfo_manager())
+        if want_h != have_h:
+            self._dimg_hsb.pack(side="bottom", fill="x") if want_h else self._dimg_hsb.pack_forget()
 
     # ------------------------------------------------------------- events --
     def _engine_event(self, etype, payload):
@@ -948,14 +995,14 @@ class App:
         self.synopsis_text.insert("1.0", syn)
         self.synopsis_text.configure(state="disabled")
 
-        # thumbnail (async, cached)
+        # cover (async; the full-res original is shown native in the scrollable viewer)
         cover = r.get("cover_url")
         self._detail_thumb_slug = slug   # which comic the detail pane is waiting on
         if cover:
-            self.detail_img_label.configure(image="", text="載入中…")
+            self._set_detail_placeholder("載入中…")
             threading.Thread(target=self._load_thumb, args=(cover, DETAIL_W, DETAIL_H), daemon=True).start()
         else:
-            self.detail_img_label.configure(image="", text="(無封面)")
+            self._set_detail_placeholder("(無封面)")
 
     def _load_thumb(self, url, max_w=DETAIL_W, max_h=DETAIL_H, on_done=None):
         """Fetch (once) + resize a cover to (max_w, max_h); cache the PhotoImage per size.
@@ -992,7 +1039,8 @@ class App:
                 if not p.exists():
                     p.write_bytes(resp.content)
                 img = Image.open(p).convert("RGB")
-                img.thumbnail((max_w, max_h))
+                if max_w != DETAIL_W:   # grid cards get downscaled; the detail pane keeps NATIVE pixels (原圖)
+                    img.thumbnail((max_w, max_h))
                 self.events.put(("ui", lambda im=img, k=key: self._make_thumb(k, im, on_done)))
             else:
                 if on_done:
@@ -1002,16 +1050,19 @@ class App:
         except Exception as e:
             print("thumb error:", e)
             if not on_done and max_w == DETAIL_W:   # detail pane fetch failed -> say so instead of hanging on "載入中…"
-                self.events.put(("ui", lambda: self.detail_img_label.configure(image="", text="(封面載入失敗)")))
+                self.events.put(("ui", lambda: self._set_detail_placeholder("(封面載入失敗)")))
 
     def _make_thumb(self, key, pil_img, on_done):
-        """Tk thread only (via the events poller): build+cache the PhotoImage, then hand it over."""
+        """Tk thread only (via the events poller): build the PhotoImage, then hand it over.
+        Full-res detail covers are NOT kept in thumb_cache — a native 1500×2400 cover is ~10MB of
+        RAM each; the disk cache under data/thumbs/ already avoids re-downloading."""
         from PIL import ImageTk
         photo = ImageTk.PhotoImage(pil_img)
-        self.thumb_cache[key] = photo
+        if key[1] != DETAIL_W:   # grid cards etc. stay memory-cached as before
+            self.thumb_cache[key] = photo
         if on_done:
             on_done(photo)
-        elif key[1] == DETAIL_W:   # detail-pane size -> route to the detail label
+        elif key[1] == DETAIL_W:   # detail-pane size -> route to the detail viewer
             self._set_detail_thumb(photo)
 
     def _set_detail_thumb(self, photo):
@@ -1023,7 +1074,29 @@ class App:
             sel = self.tree.selection()
             cur = self._iid_to_slug.get(sel[0]) if sel else None
         if cur == slug and slug is not None:
-            self.detail_img_label.configure(image=photo, text="")
+            self._set_detail_image(photo)
+
+    def _set_detail_placeholder(self, text):
+        """Show the placeholder in the cover area (hides any full-res image currently shown)."""
+        if self._detail_img_shown:
+            self._detail_img_lbl.configure(image="", text="")
+            self._dimg_vsb.pack_forget()
+            self._dimg_hsb.pack_forget()
+            self._detail_canvas.pack_forget()
+            self._detail_img_shown = False
+        if not self._detail_ph.winfo_manager():
+            self._detail_ph.pack(fill="both", expand=True)
+        self._detail_ph.configure(text=text)
+
+    def _set_detail_image(self, photo):
+        """Show the full-res cover at NATIVE pixels inside the scrollable canvas."""
+        if self._detail_ph.winfo_manager():
+            self._detail_ph.pack_forget()
+        self._detail_canvas.pack(side="left", fill="both", expand=True)
+        self._dimg_vsb.pack(side="right", fill="y")
+        self._dimg_hsb.pack(side="bottom", fill="x")
+        self._detail_img_lbl.configure(image=photo, text="")
+        self._detail_img_shown = True
 
     # ------------------------------------------------------------- actions --
     def _refresh_list(self):
