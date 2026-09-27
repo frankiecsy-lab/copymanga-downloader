@@ -429,6 +429,7 @@ class App:
         self._detail_canvas.bind(
             "<MouseWheel>", lambda e: self._detail_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
         self._detail_img_shown = False   # whether the canvas (vs the placeholder) is currently packed
+        self._detail_photo = None        # keeps the full-res PhotoImage alive while it's displayed
         self._detail_title_lbl = ttk.Label(right, font=("Segoe UI", 12, "bold"), wraplength=276)
         self.detail_title = tk.StringVar(value="")
         self._detail_title_lbl.configure(textvariable=self.detail_title)
@@ -1080,6 +1081,7 @@ class App:
         """Show the placeholder in the cover area (hides any full-res image currently shown)."""
         if self._detail_img_shown:
             self._detail_img_lbl.configure(image="", text="")
+            self._detail_photo = None    # release the RAM only after Tk no longer references it
             self._dimg_vsb.pack_forget()
             self._dimg_hsb.pack_forget()
             self._detail_canvas.pack_forget()
@@ -1096,6 +1098,9 @@ class App:
         self._dimg_vsb.pack(side="right", fill="y")
         self._dimg_hsb.pack(side="bottom", fill="x")
         self._detail_img_lbl.configure(image=photo, text="")
+        # Tk only stores the image NAME on the widget — without a live Python ref, CPython GCs the
+        # PhotoImage and every later configure() on this label raises TclError "image pyimageN doesn't exist"
+        self._detail_photo = photo
         self._detail_img_shown = True
 
     # ------------------------------------------------------------- actions --

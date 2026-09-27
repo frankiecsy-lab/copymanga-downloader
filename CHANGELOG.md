@@ -1,5 +1,20 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-09-27 — 修復：切換主題/換漫畫時 GUI 卡死（TclError: image "pyimageN" doesn't exist）
+
+### Bug：右欄顯示過原圖封面後，按 🌙 切換主題或點選其他漫畫，GUI 無反應（似卡死），console 出 `TclError: image "pyimage8" doesn't exist`
+- **根因**：tkinter 經典 PhotoImage 生命周期陷阱。full-res 封面 PhotoImage 喺 `_make_thumb()` 建立後**冇任何 Python 引用**（設計上唔入 `thumb_cache` 慳 RAM），而 Tk widget 只保存 image 嘅**名稱字串**（"pyimageN"）。`_set_detail_image()` 返回後 refcount 歸零 → CPython 即刻 GC 掉 PhotoImage → Tcl 刪除該 image，但 `_detail_img_lbl` 仍然指向死咗嘅名稱。之後任何令 Tk 重新評估呢個 label 嘅操作都會炸：
+  - 切換主題 → `_apply_widget_colors()` 對 label `configure(bg=...)` → TclError（用戶回報嘅 traceback）；異常中斷咗 `_toggle_theme()`，後面嘅 `_render()` 唔會執行 → 主題按鈕似係無反應。
+  - 點選其他漫畫 → `_set_detail_placeholder()` 做 `configure(image="", text="")` → 同樣 TclError → placeholder 永遠顯示唔到、詳情欄卡喺舊封面 → 用戶感覺「GUI 卡死」。
+- **修復**（全部 `app.py`，3 行）：加 `self._detail_photo` 單一引用槽 —
+  - `_set_detail_image()`：`configure(image=photo)` 後存 `self._detail_photo = photo`（顯示期間保持存活）。
+  - `_set_detail_placeholder()`：先 `configure(image="")` 清走 Tk 引用，**然後**先至 `self._detail_photo = None` 釋放 RAM（順序重要）。
+  - `__init__`/viewer 建立處初始化 `self._detail_photo = None`。
+- **RAM 行為不變**：同一時間只有一張 full-res 封面顯示，隱藏即釋放；唔會累積。
+
+### 測試
+withdrawn-window GUI smoke test：先喺未修復代碼上重現用戶一模一樣嘅 traceback（line 240 `configure(bg=...)` → TclError），修復後 — 模擬真實路徑（建立 full-res photo → `_set_detail_image` → 刪本地引用 + `gc.collect()`）→ 雙向切換主題 ✓、placeholder 換圖 ✓、隱藏後引用已釋放 ✓；測試腳本已刪除。
+
 ## 2026-09-27 — CBZ 檔案命名改為「漫畫名字_作者_vol_NN」格式
 
 ### 功能說明
