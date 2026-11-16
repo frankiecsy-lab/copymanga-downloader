@@ -80,4 +80,21 @@
 * **【正確資源】**：[Microsoft Docs: Restart Manager API](https://learn.microsoft.com/en-us/windows/win32/api/rstrtmgr/ne-rstrtmgr-rmtarget_resource)（查詢「邊個程序開緊某目錄樹下檔案」嘅標準工具；注意 Insider build 上 rstrtmgr.dll 可能壞咗，唔好依賴）。
 * **【解決/避坑方案】**：`taskkill /f /im sihost.exe` 後重跑 `build.bat`（sihost 會由 SearchIndexer 服務自動重生，對系統無影響）。排查順序：① `tasklist` 確認 EXE 冇運行 → ② 用 Python `os.rename` 分別測試頂層目錄 vs 子目錄，定位 lock 喺邊一層 → ③ PowerShell COM（`(New-Object -ComObject Shell.Application).Windows()` + `.LocationURL`）枚举 Explorer 視窗位置排除 Explorer → ④ 都唔係就係 sihost / Defender 實時掃描。
 
+#### 4. Git Bash 嘅 `tar` 唔支援 ZIP（解壓工具鏈 zip 靜默失敗）
+* **【問題/限制】**：Windows 11 系統自帶 `tar.exe`（bsdtar）食 ZIP，但 Git Bash 內置嘅係 GNU tar — `tar -xf xxx.zip` 報 `This does not look like a tar archive`。而且如果外層用 `bash script.sh | tee log`，pipe 會吞咗非零 exit code，睇落「成功」其實失敗。
+* **【解決/避坑方案】**：解 ZIP 一律用 `powershell.exe -NoProfile -Command "Expand-Archive -LiteralPath ... -DestinationPath ... -Force"`（見 `D:\android-tools\setup_tools2.sh`）；長腳本唔好 pipe 到 tee，直接 `> log 2>&1` 保留 exit code。
+
+#### 5. Android 工具鏈喺 D:\android-tools（本機 Java 8 用唔著）
+* **【問題/限制】**：本機系統 Java 只有 1.8，Gradle 8.9 / AGP 8.7 要 JDK 17+；Android SDK 原先完全冇。
+* **【正確資源】**：Temurin JDK17（`https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse`）、Google `commandlinetools-win-11076708_latest.zip`（解壓後必須放 `<sdk>\cmdline-tools\latest\` 先至畀 sdkmanager 認）。
+* **【解決/避坑方案】**：全部裝 `D:\android-tools\{jdk17,sdk,gradle-8.9}`（repo 之外）。**每次構建都要 `JAVA_HOME="D:/android-tools/jdk17"`**；`android/local.properties` 寫 `sdk.dir`（已 gitignore）。詳細指令見 `android/README.md`。
+
+#### 6. 離屏 WebView viewport 係 0×0，lazy-load 永遠唔觸發
+* **【問題/限制】**：Android `WebView` 冇 attach 到視窗又冇經 measure/layout 時，JS 嘅 `innerWidth/innerHeight` 係 0 — 站點圖片 lazy-load 嘅 IntersectionObserver 永遠唔會 enter viewport，`render_chapter` 永遠收唔到圖（Playwright 冇呢個問題因為真 window）。
+* **【解決/避坑方案】**：創建後手動畀屏幕尺寸：`measure(...); layout(0,0,screenW,screenH)`（已寫入 `WebViewRenderer.ensure()`）。同理適用所有離屏渲染场景。
+
+#### 7. Session 中斷可以令已寫入嘅檔案靜默消失
+* **【問題/限制】**：2026-11-17 開發 Android 期間，`DownloadEngine.kt` 寫入時工具回報「File created successfully」，但 session 重啟後個檔案唔喺盤上，之後 UI 引用全部 Unresolved reference。
+* **【解決/避坑方案】**：**跨 session 恢復後，凡要繼續編輯一個模組，先 `ls` 核對檔案清單再講**；編譯（`gradle compileDebugKotlin` / `python -m py_compile`）係最後防線，唔好單信 write 成功訊息。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*

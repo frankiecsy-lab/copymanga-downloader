@@ -1,0 +1,8 @@
+# Gradle / Android 構建產物（一律唔提交）
+.gradle/
+build/
+local.properties
+captures/
+.kotlin/
+*.apk
+*.aab

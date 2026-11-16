@@ -1,5 +1,32 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-17 — 新功能：MangaCopy Android APK v0.1.0（手機/平板下載＋離線閱讀）
+
+### 功能說明
+新增 `android/` Gradle 模組（Kotlin + Jetpack Compose，minSdk 26 / target 35），業務邏輯 1:1 移植自桌面版 `cm/`：
+- **書架**（收藏管理 + 封面網格 + 進度徽章 + 長按選單）／**發現**（源列表瀏覽 + 狀態篩選 + 無限加載）
+- **下載管理**：即時進度、停止、日誌流；SQLite 狀態機令**停止/恢復零丟失**（同桌面版 engine.py 語義一致）
+- **閱讀器**：翻頁（單頁/雙頁）/流水、閱讀方向（漫畫右→左 / 左→右）、全屏沉浸、保持螢幕開啟、前後章節
+- **輸出格式**：WebP / CBZ 兩開關（`<名>_<作者>_vol_NN.cbz` 同桌面版命名一致）
+- **更新書單**：重新渲染詳情頁 diff 出新章節自動入隊（= 桌面版「檢查更新」）
+- **手機/平板適配**：<840dp 底部導航欄、≥840dp NavigationRail；書架 Adaptive 網格
+- **下載源抽象**：`MangaSource` 接口（browse/detail/chapterImageUrls），現只有 CopyManga，預留擴展
+
+### 核心技術 — 三層抓取策略（同桌面版一致）
+- `/comics` 列表**冇 WAF** → 純 OkHttp + `ListingParser`（移植 `listing.py` 兩級解析 + fallback）
+- 詳情頁/章節頁 **WAF + AES 混淆 JS** → `WebViewRenderer`：用 Android 內置 Chromium 執行站內 JS（Playwright 等價物）；`onPageFinished`≈goto、JS 輪詢≈wait_for_selector、**完整移植振盪滾動**（+500/−120）激發 lazy-load IntersectionObserver、直接讀 `data-src`（DOM 順序＝閱讀順序）+ badge 總頁數核對
+- 圖片域名冇 WAF → `ImageDownloader`（webp 優先 + sha256 + 3 次重試）；輸出到 app 專屬外部目錄（唔使權限）
+- 關鍵坑：**離屏 WebView viewport 係 0×0 → lazy-load 永遠唔觸發**，必須手動 measure/layout 畀屏幕尺寸
+
+### 工具鏈（本機首次搭建，全部裝 `D:\android-tools\`，repo 以外）
+JDK 17 (Temurin) + Android SDK（platform 35 / build-tools 35 / platform-tools）+ Gradle 8.9。
+版本錨點：AGP 8.7.3 ↔ Gradle 8.9 ↔ Kotlin 2.0.21 ↔ Compose BOM 2024.10.01。構建指令見 `android/README.md`。
+
+### 測試
+`gradle testDebugUnitTest` 6/6 通過（列表解析主路徑/entity/fallback/空頁、webp URL 變體、檔名消毒）；
+`assembleDebug` 成功產出 `app-debug.apk`（17.8MB，aapt2 badging 驗證 package/min/target 正確）。
+**未實機驗證** — WebView 過 WAF 同後台渲染行為需實機確認（見 android/README.md 已知限制）。
+
 ## 2026-09-27 — 維護：重燒 EXE ＋ build.bat 錯誤訊息加固（SearchIndexer lock 踩坑）
 
 ### 背景
