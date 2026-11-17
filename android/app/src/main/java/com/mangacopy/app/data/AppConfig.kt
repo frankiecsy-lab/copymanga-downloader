@@ -30,6 +30,32 @@ object AppConfig {
     const val LIST_ORDERING = "-popular"
     const val LIST_DELAY_MS = 2_000L
 
+    /**
+     * CopyManga 站點題材分類（用戶 2026-11-18：「加一個題材分類，COPYMANGA 本來就有」）。
+     * 2026-11-18 PC 實測：清單由 /comics 頁導航欄抽出（`?theme=<slug>` 服務端過濾有效，
+     * 實測 theme=maoxian → total 7014）；站上限 return 50 條/頁，同 LIST_LIMIT 一致。
+     */
+    val TOPICS: List<Pair<String, String>> = listOf(
+        "aiqing" to "愛情", "huanlexiang" to "歡樂向", "maoxian" to "冒險", "qihuan" to "奇幻",
+        "baihe" to "百合", "xiaoyuan" to "校園", "kehuan" to "科幻", "dongfang" to "東方",
+        "danmei" to "耽美", "gedou" to "格鬥", "teenslove" to "TL", "shenghuo" to "生活",
+        "qingxiaoshuo" to "輕小說", "qita" to "其他", "xuanyi" to "懸疑", "mengxi" to "萌系",
+        "shengui" to "神鬼", "zhichang" to "職場", "zhiyu" to "治癒", "jiecao" to "節操",
+        "sige" to "四格", "gaoxiao" to "搞笑", "changtiao" to "長條", "jingji" to "競技",
+        "mohuan" to "魔幻", "jianniang" to "艦娘", "weiniang" to "偽娘", "rexue" to "熱血",
+        "jingsong" to "驚悚", "meishi" to "美食", "xingzhuanhuan" to "性轉換", "lizhi" to "勵志",
+        "hougong" to "後宮", "yinyuewudao" to "音樂舞蹈", "zhentan" to "偵探", "aa" to "AA",
+        "yishijie" to "異世界", "lishi" to "歷史", "chuanyue" to "穿越", "jizhan" to "機戰",
+        "zhanzheng" to "戰爭", "dushi" to "都市", "chongsheng" to "重生", "kongbu" to "恐怖",
+        "shengcun" to "生存", "wuxia" to "武俠", "zhaixi" to "宅系", "zhuansheng" to "轉生",
+        "fate" to "FATE", "xianxia" to "仙俠", "love" to "LoveLive",
+        "comiket95" to "C95", "comiket96" to "C96", "comiket97" to "C97", "comiket99" to "C99",
+        "comiket100" to "C100", "comiket101" to "C101", "comiket102" to "C102",
+        "comiket103" to "C103", "comiket104" to "C104", "comiket105" to "C105",
+        "comiket106" to "C106", "comiket107" to "C107", "comiket108" to "C108",
+        "zazhifuzengxiezhenji" to "雜誌附贈寫真集",
+    )
+
     // --- WebView 渲染 ---
     const val NAV_TIMEOUT_MS = 60_000L
     const val RENDER_SETTLE_MS = 3_000L

@@ -34,7 +34,8 @@ data class SearchPage(val items: List<ComicMeta>, val total: Int?)
 interface MangaSource {
     val id: String
     val displayName: String
-    suspend fun browse(offset: Int, status: Int?): BrowsePage
+    /** theme＝站點題材 slug（AppConfig.TOPICS；2026-11-18 實測 /comics?theme= 服務端過濾有效）。 */
+    suspend fun browse(offset: Int, status: Int?, theme: String? = null): BrowsePage
     suspend fun search(query: String, offset: Int, limit: Int = 20): SearchPage
     suspend fun detail(slug: String): DetailResult
     /** onPartial：每當 DOM 出現新圖片即時回調（URL 清單 + 徽章總數）— 閱讀器即時預載用。 */

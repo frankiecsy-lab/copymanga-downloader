@@ -21,9 +21,13 @@ object CopyMangaSource : MangaSource {
     override val id = "copymanga"
     override val displayName = "CopyManga"
 
+    // 快fail超時（用戶 2026-11-18「endless loading」排查）：舊版 30s/60s 超時
+    // ＋失敗重試 = 最長拖成三分幾鐘空轉 spinner。列表/搜索都係細 HTML/JSON，
+    // 12/25/30s 綽綽有餘 — 真出事短時間如實報錯，等用戶撳「刷新」
     private val http = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .callTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
         .build()
 
@@ -82,16 +86,17 @@ object CopyMangaSource : MangaSource {
     /** 請求失敗時作廢，下次重新探測（域名隨時死，要自動切換）。 */
     fun invalidateBase() { cachedBase = null }
 
-    override suspend fun browse(offset: Int, status: Int?): BrowsePage = withContext(Dispatchers.IO) {
-        // 一次失敗（域名中途死）→ invalidate + 重新探測再嚟一次
-        try { doBrowse(offset, status) }
-        catch (e: Exception) {
-            invalidateBase()
-            doBrowse(offset, status)
+    override suspend fun browse(offset: Int, status: Int?, theme: String?): BrowsePage =
+        withContext(Dispatchers.IO) {
+            // 一次失敗（域名中途死）→ invalidate + 重新探測再嚟一次
+            try { doBrowse(offset, status, theme) }
+            catch (e: Exception) {
+                invalidateBase()
+                doBrowse(offset, status, theme)
+            }
         }
-    }
 
-    private suspend fun doBrowse(offset: Int, status: Int?): BrowsePage {
+    private suspend fun doBrowse(offset: Int, status: Int?, theme: String?): BrowsePage {
         // 同桌面版一樣有禮貌限速：翻下一頁前等 2 秒（robots 提 10 秒，用戶手動翻頁已天然限速）
         if (offset > 0) delay(AppConfig.LIST_DELAY_MS)
         val base = currentBase()
@@ -100,6 +105,8 @@ object CopyMangaSource : MangaSource {
             .append(AppConfig.LIST_ORDERING)
             .append("&offset=").append(offset).append("&limit=").append(AppConfig.LIST_LIMIT)
             if (status != null) append("&status=").append(status)
+            // 題材分類（用戶 2026-11-18：站點本來就有 — /comics 頁題材欄就係呢個參數）
+            if (!theme.isNullOrEmpty()) append("&theme=").append(theme)
         }
         val request = Request.Builder().url(url)
             .header("User-Agent", AppConfig.USER_AGENT)

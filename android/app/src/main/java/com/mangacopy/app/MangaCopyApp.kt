@@ -5,6 +5,7 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.mangacopy.app.data.AppConfig
 import com.mangacopy.app.data.Db
+import com.mangacopy.app.data.Notify
 import com.mangacopy.app.data.Storage
 import com.mangacopy.app.source.WebViewRenderer
 import okhttp3.OkHttpClient
@@ -24,10 +25,11 @@ class MangaCopyApp : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
-        // 三個需要 Context 嘅單例全部喺呢度初始化（UI 層直接 Db.get()，呢度唔 init 就閃退）
+        // 四個需要 Context 嘅單例全部喺呢度初始化（UI 層直接 Db.get()，呢度唔 init 就閃退）
         Db.init(this)
         Storage.init(this)
         WebViewRenderer.init(this)
+        Notify.init(this)
     }
 
     override fun newImageLoader(): ImageLoader =

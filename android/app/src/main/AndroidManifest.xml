@@ -4,6 +4,8 @@
     <!-- 漫畫列表 / 圖片下載 / WebView 渲染詳情頁 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 書架新章系統通知（Android 13+ 運行時授權；設置頁開關撳制時請求） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".MangaCopyApp"

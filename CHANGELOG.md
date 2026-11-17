@@ -1,5 +1,65 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-18 — 改進＋修復：KIECOMIC Android v0.3.4 第二版（全站 LAZYLOAD 根治 ＋ 倉庫 ＋ 通知 ＋ 備份 ＋ GitHub 檢查更新）
+
+同一個 v0.3.4 版號內嘅大版本迭代（用戶指定「原版本更新…相同版本號」— Release asset 直接替換）：
+
+### ♾️ 搜尋/瀏覽頁全站分批 LAZYLOAD（用戶：「只显示几十个」→「没有LAZYLOAD」→「有时會ENDLISS LOADING」三輪排查定案）
+- **站點實測**：`/comics?ordering&offset&limit=50` limit 硬上限 50、深 offset 可用、
+  total=46811；`&status=1`（連載中→16456）／`&theme=maoxian`（冒險→7014）服務端過濾全部有效
+- **endless loading 根因（2am 實測截圖復現）**：舊版 `loadPage` 用 `if (!loading)` 閘 —
+  轉 filter 時舊分頁請求仲在飛 → 新 filter 首載被**靜默吞掉** → items 已清冇人重試 →
+  空白＋spinner 無限轉；舊請求完成後仲會將**錯 filter 數據＋錯 offset** 寫入清單
+- **重做載入狀態機**：單飛 `pageJob`（轉 filter／刷新即 `cancel()` 舊請求）＋ `AtomicInteger`
+  世代號（舊 job 所有狀態寫入都要 gen 匹配先成立）；`total` 一齊 reset（徽章跟 filter 如實，
+  唔再掛住舊 46811）
+- **主動預取 lazyload**：`rememberLazyGridState`／`rememberLazyListState` + `snapshotFlow` —
+  距底 10 格即提早拉下一頁（舊版淨靠 footer 可見被動觸發）；載完一批 footer 推出螢幕自然停
+- **被攔截 shell 頁防風暴**：首頁真空且 total=null → 如實報錯「站點回應異常」停鏈
+  （舊版無限快重試 → `invalidateBase` 全線探測風暴 log 實測 13 輪循環燒網）；
+  列表/搜索 OkHttp 超時 30s/60s → **12/25/callTimeout 30s** 快 fail 如實報錯
+- **ListUpdater 失敗退讓**：詳情頁檢查失敗等 10 秒先試下一部（站點維護時唔好逐部連打）
+- 實機回归（8 吋 pad 1880×3008）：深滚 12 屏同頂部標題重疊=0（真的逐頁 fetch）；
+  載入中轉「連載中」→ badge 即時 46811→16456、清單重載冇卡死；題材「冒險」→ 7014＋chip ✓
+
+### 🏷 題材分類 FILTER（用戶：「加一個題材分類，FILTER ICON」）
+- 搜尋框右邊 filter icon → ModalBottomSheet 站點原生 65 個題材（`AppConfig.TOPICS`，
+  /comics 頁導航抽出）→ `?theme=slug` **服務端**過濾；已揀顯示「題材：名」chip 一撳清返
+
+### 📚 閱讀過 ≠ 放書架 ＋ 啟動自動清理（用戶：「閱讀過不代表要放書架」＋「每次打開自動清理已下載但冇放書架嘅內容」）
+- `openFromSearch` 剝走自動 `setFavorite` — 入詳情只 upsert（歷史/進度需要），收藏一律手動
+- 啟動 3 秒後 `LibraryCleaner.run()`：掃「有圖落盤但 favorite=0」→ 先刪磁碟檔（趁
+  images.path 未清攞路徑）再 purgeComicData（chapters/images/進度 kv；comics＋history 保留）
+- 實機验证：「全知讀者視角」(65 圖 favorite=0) 被清，書架 8 部＋歷史 9 條完整 ✓
+
+### 🗃 設置「更新倉庫」（用戶定稿語義：只統計全站**套數**增減，唔包括章節）
+- `repo` 表全站 path_word 快照＋runTs 蓋印制：完整跑完先 prune（last_seen≠runTs＝已下架）；
+  半輪 prune 會誤報天量減少 → 嚴禁；kv `repo_run`="runTs|offset|added" **斷點續跑**
+- 設置頁：更新／停止制、進度行（抓取中 x/總數·新增 N 套·已跑幾多頁＋進度條）、
+  完成摘要「上次更新倉庫：幾時前·增X/減Y套·全站Z部」（kv 持久化跨啟動重現）
+
+### 🔄 GitHub 檢查更新（用戶：「用 GITHUB，有更新要在打開APP時提醒一次」）
+- `UpdateChecker`：啟動查 `api.github.com/repos/.../releases` → 解析 `android-vX.Y.Z` tag
+  逐段數值比較（0.3.10>0.3.9）；12 小時節流＋kv 快取（節流期內開 App 唔打網直接用快取）
+- 有新版先彈一次 dialog（kv `upd_seen` 記版本號，同一版只騷擾一次）；「去下載」開瀏覽器
+  Release 頁；全鏈路實測：pad 上真 API → kv `upd_latest=0.3.4|github url` ✓ 無新版唔彈
+- 純邏輯 `cmp()` 加單元測試
+
+### 🔔 書架新章 Android 系統通知 ＋ 設置開關（用戶：「書架有更新用系統通知提示，開關放設置」）
+- `Notify`：channel「書架新章節」（IMPORTANCE_DEFAULT）；ListUpdater 檢查完成且
+  newChapters>0 且開關（kv `notify_ch` 默認開）→ 通知「書架 N 部漫畫有更新·共 X 個新章節」
+  → tap 開返 App；Android 13+ POST_NOTIFICATIONS 運行時授權（設置頁撳開關時請求，
+  Manifest 已加權限）；未授權靜默跳過
+- 實測：channel 已註冊（dumpsys notification 確認）、設置頁開關渲染正常 ✓
+
+### 💾 備份匯出／匯入（用戶：「使用者備份所有設置及書架」）
+- `Backup`：SAF 文件選擇器（CreateDocument／OpenDocument）讀寫 JSON —
+  `settings` 只匯出**用戶設置白名單**（閱讀默認／主題／列表模式／通知開關 —
+  新章記時/閱讀進度/倉庫游標等本機內部狀態一律唔帶走）＋`bookshelf` 收藏全行
+  （path_word/名/作者/封面/狀態/簡介）；匯入即 upsert＋setFavorite ＋ `UiTheme.load` 即時生效
+  ＋頁面所有開關重讀；唔係 KIECOMIC 檔／JSON 壞 → 如實報錯
+- 下載圖片唔納入備份（體積太大，返新機重新下載）；實測設置頁兩制渲染正常 ✓
+
 ## 2026-11-18 — 改進：KIECOMIC Android v0.3.4（跨章雙向著陸鐵律 ＋ 全屏/閱讀方向默認反轉 ＋ 流水定位加固）
 
 ### 🔀 跨章雙向著陸鐵律（用戶：「每話第一頁做上一頁，必須返回上一話**最後一頁**；最後一頁做下一頁，必須係下一話**第一頁**」）

@@ -2,11 +2,13 @@ package com.mangacopy.app.download
 
 import android.util.Log
 import com.mangacopy.app.data.Db
+import com.mangacopy.app.data.Notify
 import com.mangacopy.app.source.SourceRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -60,21 +62,32 @@ object ListUpdater {
         _state.update { it.copy(running = true, done = 0, total = targets.size,
                                 current = "", newChapters = 0, lastError = null) }
         job = scope.launch {
+            var updatedComics = 0
             try {
                 for (slug in targets) {
                     _state.update { it.copy(current = db.getComic(slug)?.displayName ?: slug) }
                     try {
                         val n = updateOne(slug)
-                        if (n > 0) _state.update { s -> s.copy(newChapters = s.newChapters + n) }
+                        if (n > 0) {
+                            updatedComics++
+                            _state.update { s -> s.copy(newChapters = s.newChapters + n) }
+                        }
                         Log.i("MCLIST", "$slug 檢查完：新章 $n")
                     } catch (e: Exception) {
                         Log.w("MCLIST", "$slug 檢查失敗：${e.message}")
                         _state.update { it.copy(lastError = "${db.getComic(slug)?.displayName ?: slug}：${e.message}") }
+                        // 失敗退讓（2026-11-18 探測風暴排查）：站點維護/被劫持時
+                        // 逐部連打詳情頁 = invalidateBase 循環燒網，等 10 秒先試下一部
+                        delay(10_000)
                     }
                     _state.update { it.copy(done = it.done + 1) }
                 }
             } finally {
                 _state.update { it.copy(running = false, current = "", lastFinishAt = System.currentTimeMillis()) }
+                // 書架新章系統通知（用戶 2026-11-18：開關喺設置，默認開）
+                val st = _state.value
+                if (st.newChapters > 0 && db.getMeta("notify_ch", "true") == "true")
+                    Notify.chaptersUpdate(st.newChapters, updatedComics)
             }
         }
     }

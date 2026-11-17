@@ -99,6 +99,18 @@ class CoreLogicTest {
             com.mangacopy.app.source.CopyMangaSource.rebaseChapterUrl("not-a-url", base))
     }
 
+    // ---------- UpdateChecker 版本比較（GitHub 檢查更新用） ----------
+
+    @Test
+    fun `版本比較 - 數值逐段、10 大過 9`() {
+        assertTrue(com.mangacopy.app.data.UpdateChecker.cmp("0.3.5", "0.3.4") > 0)
+        assertTrue(com.mangacopy.app.data.UpdateChecker.cmp("0.3.10", "0.3.9") > 0)   // 唔可以字串比較
+        assertTrue(com.mangacopy.app.data.UpdateChecker.cmp("0.4.0", "0.3.9") > 0)
+        assertTrue(com.mangacopy.app.data.UpdateChecker.cmp("0.3.3", "0.3.4") < 0)
+        assertEquals(0, com.mangacopy.app.data.UpdateChecker.cmp("0.3.4", "0.3.4"))
+        assertTrue(com.mangacopy.app.data.UpdateChecker.cmp("0.3.4.1", "0.3.4") > 0)  // 多一段視為更新
+    }
+
     private fun escapeAttr(s: String) =
         s.replace("&", "&amp;").replace("\"", "&quot;")
 }

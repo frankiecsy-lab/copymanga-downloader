@@ -180,4 +180,14 @@
 * **【正確資源】**：[Compose LazyListState 文檔](https://developer.android.com/reference/kotlin/androidx/compose/foundation/lazy/LazyListState)（`canScrollForward`：已 clamp 到內容尾嘅權威訊號；layoutInfo 喺 re-layout 前後會變，snapshotFlow 先見真值）。
 * **【解決/避坑方案】**（`ReaderScreen.kt` 已寫入，Realme 實機回归）：① 定位後 **settle 驗證＋補跳**：`while (tries<3 && firstVisibleItemIndex != tgt && canScrollForward) { delay(120); scrollToItem(tgt) }` — `canScrollForward=false` 即尾頁＋footer 全可見（佔位頁未落圖时 firstVisible 恒差一頁都係視覺到尾），唔使白補；② footer 自動接章要 **雙條件**：`lastVisible >= totalPages && firstVisible >= totalPages - 2`；向後跨章落尾頁瞬間 footer 已可見 → `landedAtTail` 旗壓住自動接，用戶翻返上頁（curPos < total-2）即復活；③ `gotoChapter` 內**同步**（唔靠 effect）`prog = Prog(true,0,0)` 再改 currentCid；④ 跨章降落頁用 sentinel 參數 `land`（0=第1頁／Int.MAX_VALUE=尾頁／null=還原 readPos），`pendingRestore = remember(currentCid, mode){ landOverride ?: readPos }`，restore 完成即清 landOverride — 跨章鐵律「第1頁→上一章尾／尾頁→下一章第1頁」同「手動開章還原自己 readPos」共用一條 restore 路徑。
 
+#### 26. 「endless loading」元兇：`if (!loading)` 閘靜默吞咗 filter 切換嘅首載（lazyload 狀態機教訓）
+* **【問題/限制】**（2026-11-18 凌晨實測截圖復現）：BrowseScreen 舊版 `loadPage` 開頭 `if (!loading) {...}` — 轉 status/題材 filter 時舊分頁請求仲喺度飛 → 新 filter 首載被**靜默吞掉**（無報錯、無人重試）→ items 已清＝空白＋spinner 無限轉；舊請求完成後仲將**錯 filter 數據＋錯 offset** 寫入清單。另外：站點被路由器劫持返 shell 頁時 ListingParser 返 items=[] 且 total=null → footer 鏈「未載完」無限快重試 → 每次失敗 `invalidateBase` → 全線三域名探測風暴（logcat 實測 13 輪×10 秒循環燒網）；OkHttp 30s/60s 超時再將一次失敗拖成幾分鐘假死。
+* **【正確資源】**：站點參數 PC curl 實錽（同 App 並行驗證）：`/comics?ordering=-popular&offset=N&limit=50` limit 硬上限 50、深 offset 可用、total=46811；`status=1`→16456／`status=2`→17464、`theme=maoxian`→7014 — **全部服務端有效**，遇到「篩選好似冇效」先排除 App 層再懷疑站點。
+* **【解決/避坑方案】**（已寫入 `BrowseScreen.kt`，pad 實機回归）：① **單飛 `pageJob` ＋ `AtomicInteger` 世代號**：轉 filter/刷新 → `gen++; pageJob.cancel(); loading=false`；每個 job 完成時先檢查 `myGen == gen.get()` 先准寫 items/total/error/loading；② 首页真空＋total=null → 如實 `error=` 報錯停鏈（retryOk=false）；③ 列表/搜索 client 超時 12/25/callTimeout 30s；④ lazyload 用 `rememberLazyGridState`+`snapshotFlow{lastVisibleIndex}` 距底 10 格主動預取，淨靠 footer 可見觸發太被動；⑤ ListUpdater 詳情頁失敗後 delay(10s) 先試下一部。
+
+#### 27. GitHub Release 檢查更新＋ADB 驗證嘅兩個固定坑
+* **【問題/限制】**：① 檢查更新用 `https://api.github.com/repos/{owner}/{repo}/releases?per_page=10`（未授權 60 次/鐘/IP）— 必须做節流＋kv 快取（現 12 小時一次，節流期內開 App 唔打網直接用快取決定彈唔彈），否则每次開 App 都打 API 好快撞 rate limit；版本比較要**逐段數值**（"0.3.10">"0.3.9"，字串比較會錯）。② ColorOS/realme 設備 `input tap` 會**靜默吞咗 fling 滑動後/空閒後嘅第一次點擊**（uiautomator bounds 完全正確都冇用），極易誤判做「button 失靈」。
+* **【正確資源】**：本倉 Release tag 慣例 `android-vX.Y.Z`（`gh release` 發佈用同一格式，UpdateChecker 就按呢個 prefix 篩選）。
+* **【解決/避坑方案】**：① `UpdateChecker`：kv `upd_ts`（節流）＋`upd_latest`（快取）＋`upd_seen`（每版只彈一次 dialog）；② ADB 測試凡 tap 後驗證失敗，**先當被吞、原座標再 tap 一次先下結論**；tap 前唔好夹住 fling（swipe 完等 ≥1.5 秒）；Windows Git Bash 入面 Windows Python 同 MSYS shell 嘅 `/tmp` 唔互通，腳本傳遞坐标用 stdout `$(...)` 唔好寫 /tmp 檔。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*

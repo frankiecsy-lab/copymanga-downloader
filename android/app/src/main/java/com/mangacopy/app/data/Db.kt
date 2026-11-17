@@ -15,8 +15,8 @@ import java.time.format.DateTimeFormatter
  * 表結構同桌面版一致（comics / chapters / images / kv），方便日後匯入桌面 DB。
  */
 class Db private constructor(context: Context) :
-    // v5：comics.pinned（書架置頂）— 新版本號先會觸發 onUpgrade → createSchema 嘅冪等 ALTER
-    SQLiteOpenHelper(context.applicationContext, "mangacopy.db", null, 5) {
+    // v5：comics.pinned（書架置頂）；v6：repo 表（全站倉庫快照 —「更新倉庫」增減套數統計）
+    SQLiteOpenHelper(context.applicationContext, "mangacopy.db", null, 6) {
 
     companion object {
         @Volatile private var instance: Db? = null
@@ -104,6 +104,16 @@ class Db private constructor(context: Context) :
         )
         db.execSQL("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
         db.execSQL("CREATE TABLE IF NOT EXISTS history (path_word TEXT PRIMARY KEY, viewed_at TEXT)")
+        // 倉庫快照（用戶 2026-11-18：「更新倉庫」＝全站漫畫清單 snapshot，只計增減套數）：
+        // 每輪更新將碰到嘅行蓋 runTs 印，收尾刪走冇印嘅行＝被站點移除嘅漫畫
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS repo (
+                path_word TEXT PRIMARY KEY,
+                name      TEXT,
+                last_seen TEXT
+            )""".trimIndent()
+        )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_chapters_status ON chapters(comic_path_word, status)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_images_status ON images(chapter_id, status)")
         // v4：隊列次序 + 站點原始章節序（流式）
@@ -120,7 +130,43 @@ class Db private constructor(context: Context) :
         // v5：取消下載 paused ＋ 書架置頂 pinned（用戶要求）
         runCatching { db.execSQL("ALTER TABLE comics ADD COLUMN paused INTEGER DEFAULT 0") }
         runCatching { db.execSQL("ALTER TABLE comics ADD COLUMN pinned INTEGER DEFAULT 0") }
+        // v6：repo 表 — 冪等遷移每次開 DB 都跑（見 init() 教訓：唔好淨靠 onUpgrade）
+        runCatching {
+            db.execSQL("CREATE TABLE IF NOT EXISTS repo(path_word TEXT PRIMARY KEY, name TEXT, last_seen TEXT)")
+        }
     }
+
+    // ------------------------------------------------------------------ 倉庫快照（更新倉庫）
+    /** 倉庫快照總數（上次更新到而家為人所知嘅全站套數）。 */
+    fun repoCount(): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM repo", null)
+            .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    /**
+     * 倉庫一頁入庫（runTs 蓋印）：INSERT OR IGNORE 計新增加數，既有行刷新 name＋last_seen。
+     * 返回本頁新增（之前 snapshot 冇）嘅套數。
+     */
+    fun repoUpsertRun(items: List<Pair<String, String>>, runTs: String): Int {
+        val db = writableDatabase
+        var added = 0
+        db.beginTransaction()
+        try {
+            val ins = db.compileStatement(
+                "INSERT OR IGNORE INTO repo(path_word,name,last_seen) VALUES(?,?,?)")
+            for ((pw, name) in items) {
+                ins.bindString(1, pw); ins.bindString(2, name); ins.bindString(3, runTs)
+                if (ins.executeInsert() != -1L) added++
+                db.execSQL("UPDATE repo SET name=?, last_seen=? WHERE path_word=?",
+                    arrayOf(name, runTs, pw))
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        return added
+    }
+
+    /** 收尾：刪走本輪冇蓋印嘅行（＝站點已移除嘅漫畫）；返回移除數。只准喺完整跑完一輪先調。 */
+    fun repoPruneRun(runTs: String): Int =
+        writableDatabase.delete("repo", "last_seen!=?", arrayOf(runTs))
 
     // ------------------------------------------------------------------ kv/meta
     fun setMeta(key: String, value: String) {
@@ -484,6 +530,30 @@ class Db private constructor(context: Context) :
         writableDatabase.execSQL(
             "UPDATE chapters SET cbz_path=NULL WHERE comic_path_word=?", arrayOf(pathWord)
         )
+    }
+
+    // ------------------------------------------------------------------ 啟動自動清理
+    /**
+     * 「已落圖但冇放書架」嘅漫畫（用戶 2026-11-18：閱讀過唔算收藏 —
+     * 每次開 App 背景自動清理呢啲已下載內容）。有 images 落咗盤（path 非空）先計，
+     * 淨係睇過詳情頁冇落圖嘅唔使清。
+     */
+    fun downloadedNotFavorite(): List<String> = readableDatabase.rawQuery(
+        "SELECT c.path_word FROM comics c WHERE IFNULL(c.favorite,0)=0 AND EXISTS " +
+            "(SELECT 1 FROM images i WHERE i.comic_path_word=c.path_word AND i.path IS NOT NULL)", null
+    ).use { c -> generateSequence { if (c.moveToNext()) c.getString(0) else null }.toList() }
+
+    /**
+     *  purge 下載數據：chapters/images 行＋新章標記＋閱讀進度 kv 全清
+     * （comics 行＋history 保留 — 閱讀歷史照見，再翻閱會重新抓清單）。
+     * ⚠️ 磁碟檔由 LibraryCleaner 先删（要趁 images.path 未清之前攞路徑）。
+     */
+    fun purgeComicData(pathWord: String) {
+        val db = writableDatabase
+        db.execSQL("DELETE FROM chapters WHERE comic_path_word=?", arrayOf(pathWord))
+        db.execSQL("DELETE FROM images WHERE comic_path_word=?", arrayOf(pathWord))
+        db.execSQL("DELETE FROM kv WHERE key LIKE ? OR key=?",
+            arrayOf("readpos:$pathWord:%", "newch:$pathWord"))
     }
 
     /** 閱讀進度（每章記住睇到第幾頁）— kv 持久化。 */

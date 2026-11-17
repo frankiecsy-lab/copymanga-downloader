@@ -4,17 +4,22 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -36,7 +41,10 @@ import com.mangacopy.app.data.Db
 import com.mangacopy.app.source.ComicMeta
 import com.mangacopy.app.source.SourceRegistry
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 搜尋頁（用戶要求：發現主菜單改為搜尋）：
@@ -55,6 +63,8 @@ fun BrowseScreen(nav: NavHostController) {
     var query by remember { mutableStateOf("") }         // 輸入框實時內容
     var activeQ by remember { mutableStateOf("") }       // 已提交嘅搜索詞（空=浏览模式）
     var statusFilter by remember { mutableStateOf<Int?>(null) }
+    var themeFilter by remember { mutableStateOf<String?>(null) }   // 站點題材（服務端 ?theme=）
+    var showThemeSheet by remember { mutableStateOf(false) }
     var items by remember { mutableStateOf<List<ComicMeta>>(emptyList()) }
     var total by remember { mutableStateOf<Int?>(null) }
     var offset by remember { mutableStateOf(0) }
@@ -63,13 +73,29 @@ fun BrowseScreen(nav: NavHostController) {
     var grid by remember { mutableStateOf(ListMode.isGrid(db)) }
     var tagFilter by remember { mutableStateOf<String?>(null) }
     var shelfTick by remember { mutableStateOf(0) }   // 收藏變動 → 重算 inShelf（否則 + 撳咗冇反應）
+    // 分頁加固（用戶 2026-11-18：「只显示几十个」＋「有時會 endless loading」）：
+    // 舊版两大結構缺陷 —
+    //  ① `if (!loading)` 閘：轉 filter 時舊請求仲在飛 → 新 filter 的首載被**靜默吞掉**
+    //     → items 已清、冇人重試 → 空白＋spinner 無限轉（2am 實測截圖根因）；
+    //  ② 舊請求完成後照寫 items/offset → 污染新 filter（錯 filter 數據＋錯 offset）。
+    // 新架構：單飛 pageJob（轉 filter/刷新即 cancel 舊 job）＋ gen 世代號
+    // （舊 job 嘅任何狀態寫入都要 gen 匹配先成立，徹底防污染）。
+    var batchTick by remember { mutableStateOf(0) }
+    val gen = remember { AtomicInteger(0) }
+    val pageJob = remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val ioScope = rememberCoroutineScope()
 
-    val loadPage: suspend () -> Unit = {
-        if (!loading) {
-            loading = true; error = null
+    fun runPage() {
+        if (pageJob.value?.isActive == true) return   // 單飛：同時只有一個分頁請求
+        val myGen = gen.incrementAndGet()
+        loading = true; error = null
+        pageJob.value = ioScope.launch {
             try {
+                val before = offset
                 val page = if (activeQ.isEmpty()) {
-                    val p = withContext(Dispatchers.IO) { source.browse(offset, statusFilter) }
+                    val p = withContext(Dispatchers.IO) {
+                        source.browse(offset, statusFilter, themeFilter)
+                    }
                     offset += AppConfig.LIST_LIMIT
                     p.items to p.total
                 } else {
@@ -77,14 +103,23 @@ fun BrowseScreen(nav: NavHostController) {
                     offset += 20   // searchcl 每頁上限 20
                     p.items to p.total
                 }
+                if (myGen != gen.get()) return@launch   // 世代已過（轉咗 filter）→ 結果報廢
                 items = (items + page.first).distinctBy { it.pathWord }
-                total = page.second
+                // 中途空頁（站點無更多內容/削頁）→ 如實收 total 做「已載完」，唔好死循環燒網
+                total = if (page.first.isEmpty() && before > 0)
+                    minOf(before, page.second ?: before) else page.second
+                // 首頁真空且冇 total（站點返被攔截嘅 shell 頁／路由器劫持頁）→
+                // 如實報錯停鏈 — 舊版 total=null 唔算「已載完」→ footer 鏈無限快重试
+                // → invalidateBase 探測風暴燒網（log 實測 13 輪循環）
+                if (page.first.isEmpty() && before == 0 && page.second == null)
+                    error = "站點回應異常（可能被攔截/維護中）— 撳上方「刷新」重試"
+                batchTick++
             } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e   // 离开页面/重搜的正常取消 → 唔好显示成「载入失败」
+                throw e   // 轉 filter/离开页面嘅正常取消 → 唔好显示成「载入失败」
             } catch (e: Exception) {
-                error = "載入失敗：${e.message}"
+                if (myGen == gen.get()) error = "載入失敗：${e.message}"
             } finally {
-                loading = false
+                if (myGen == gen.get()) loading = false
             }
         }
     }
@@ -92,18 +127,24 @@ fun BrowseScreen(nav: NavHostController) {
     // 全域緩存（用戶要求）：列表/搜尋結果入記憶體緩存 10 分鐘 —
     // 返嚟即display 舊結果，超時或撳「刷新」先再打站點
     var forceTick by remember { mutableStateOf(0) }
-    val cacheKey = if (activeQ.isEmpty()) "browse:${statusFilter ?: "all"}" else "search:$activeQ"
-    LaunchedEffect(activeQ, statusFilter, forceTick) {
+    val cacheKey = if (activeQ.isEmpty())
+        "browse:${statusFilter ?: "all"}:${themeFilter ?: "all"}" else "search:$activeQ"
+    LaunchedEffect(activeQ, statusFilter, themeFilter, forceTick) {
+        // 轉 filter/刷新：殺緊在飛嘅舊請求（gen++ 令其狀態寫入全部報廢）—
+        // 唔殺就會出現「空白＋無限 loading」同錯 filter 數據污染
+        gen.incrementAndGet()
+        pageJob.value?.cancel(); pageJob.value = null
+        loading = false
         val fresh = forceTick == 0 && ListCache.key == cacheKey &&
             System.currentTimeMillis() - ListCache.ts < 10 * 60_000L &&
             ListCache.items.isNotEmpty()
         if (fresh) {
             items = ListCache.items; offset = ListCache.offset; total = ListCache.total
-            tagFilter = null; error = null
+            tagFilter = null; error = null; batchTick++   // bump 令 footer 可以由舊 offset 續載
             return@LaunchedEffect
         }
-        items = emptyList(); offset = 0; tagFilter = null
-        loadPage()
+        items = emptyList(); offset = 0; total = null; tagFilter = null   // total 一齊清：徽章跟 filter 如實
+        runPage()
         if (items.isNotEmpty()) {
             ListCache.key = cacheKey; ListCache.items = items
             ListCache.offset = offset; ListCache.total = total
@@ -151,6 +192,15 @@ fun BrowseScreen(nav: NavHostController) {
                     leadingIcon = { Icon(Icons.Filled.Search, null) },
                     trailingIcon = {
                         Row {
+                            // 題材分類 filter（用戶 2026-11-18：「加一個題材分類，FILTER ICON」）—
+                            // browse 模式先有：服務端 ?theme= 過濾；searchcl API 冇此參數
+                            if (activeQ.isEmpty()) {
+                                IconButton(onClick = { showThemeSheet = true }) {
+                                    Icon(Icons.Filled.FilterList, "題材分類",
+                                        tint = if (themeFilter != null) MaterialTheme.colorScheme.primary
+                                               else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                             IconButton(onClick = { forceTick++ }) {
                                 Icon(Icons.Filled.Refresh, "刷新（clear 緩存重載）")
                             }
@@ -191,6 +241,19 @@ fun BrowseScreen(nav: NavHostController) {
                     }
                     // 「N 部」已移去品牌行右上角（用戶 2026-11-17）
                 }
+                // 已揀題材：顯示喺狀態列下面，一撳清返（唔使入返 sheet 先見到）
+                themeFilter?.let { slug ->
+                    val name = AppConfig.TOPICS.firstOrNull { it.first == slug }?.second ?: slug
+                    Row(Modifier.padding(top = 2.dp)) {
+                        FilterChip(
+                            selected = true,
+                            onClick = { themeFilter = null },
+                            leadingIcon = { Icon(Icons.Filled.FilterList, null,
+                                Modifier.size(16.dp)) },
+                            label = { Text("題材：$name", maxLines = 1) },
+                        )
+                    }
+                }
                 if (tagPool.isNotEmpty()) {
                     FlowRow(
                         modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
@@ -222,7 +285,16 @@ fun BrowseScreen(nav: NavHostController) {
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             }
             if (grid) {
+                val gridState = rememberLazyGridState()
+                // 主動預取 lazyload（用戶 2026-11-18：「没有LAZYLOAD」）—
+                // 淨靠 footer 可見先觸發太被動；而家距底 10 格就提早拉下一頁。
+                // footer item index = shown.size；載完一批 footer 推出螢幕即自然停（單飛閘保底）。
+                LaunchedEffect(gridState, shown.size) {
+                    snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+                        .collectLatest { last -> if (last >= shown.size - 10) runPage() }
+                }
                 LazyVerticalGrid(
+                    state = gridState,
                     columns = GridCells.Adaptive(minSize = 110.dp),
                     contentPadding = PaddingValues(12.dp),
                     modifier = Modifier.fillMaxSize(),
@@ -240,11 +312,16 @@ fun BrowseScreen(nav: NavHostController) {
                     //    GridItemSpan(0) 直接 IllegalArgumentException 閃退；
                     //    要用 LazyGridItemSpanScope.maxLineSpan（範圍內自動係行內總格數）
                     gridItems(listOf(0), span = { GridItemSpan(maxLineSpan) }) {
-                        LoadMoreFooter(loading, total, shown.size, error == null) { loadPage() }
+                        LoadMoreFooter(loading, total, offset, batchTick, error == null) { runPage() }
                     }
                 }
             } else {
-                LazyColumn(Modifier.fillMaxSize()) {
+                val listState = rememberLazyListState()
+                LaunchedEffect(listState, shown.size) {
+                    snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+                        .collectLatest { last -> if (last >= shown.size - 8) runPage() }
+                }
+                LazyColumn(Modifier.fillMaxSize(), state = listState) {
                     items(shown, key = { it.pathWord }) { meta ->
                         ListRow(meta = meta,
                             onClick = { openFromSearch(db, nav, meta); shelfTick++ },
@@ -252,7 +329,36 @@ fun BrowseScreen(nav: NavHostController) {
                             inShelf = remember(meta, shelfTick) { db.getComic(meta.pathWord)?.favorite == true },
                         )
                     }
-                    item { LoadMoreFooter(loading, total, shown.size, error == null) { loadPage() } }
+                    item { LoadMoreFooter(loading, total, offset, batchTick, error == null) { runPage() } }
+                }
+            }
+        }
+    }
+
+    // 題材分類 sheet（用戶 2026-11-18：「COPYMANGA 本來就有題材分類，加一個 FILTER ICON」）—
+    // 站點 65 個題材原樣列出（AppConfig.TOPICS，/comics 頁導航欄抽出），服務端過濾
+    if (showThemeSheet) {
+        ModalBottomSheet(onDismissRequest = { showThemeSheet = false }) {
+            Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 24.dp)
+                .verticalScroll(rememberScrollState())) {
+                Text("題材分類", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(10.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    FilterChip(
+                        selected = themeFilter == null,
+                        onClick = { themeFilter = null; showThemeSheet = false },
+                        label = { Text("全部", maxLines = 1) },
+                    )
+                    AppConfig.TOPICS.forEach { (slug, name) ->
+                        FilterChip(
+                            selected = themeFilter == slug,
+                            onClick = { themeFilter = slug; showThemeSheet = false },
+                            label = { Text(name, maxLines = 1) },
+                        )
+                    }
                 }
             }
         }
@@ -260,9 +366,10 @@ fun BrowseScreen(nav: NavHostController) {
 }
 
 private fun openFromSearch(db: Db, nav: NavHostController, meta: ComicMeta) {
+    // 用戶（2026-11-18）：「閱讀過不代表要放書架，只有手動放書架的才算」—
+    // 入詳情只 upsert 資料（歷史/進度需要呢行），收藏一律留返手動（格仔 +／詳情頁收藏）
     db.upsertComic(meta.pathWord, meta.name, meta.author, meta.coverUrl,
         serialStatus = meta.statusLabel)
-    db.setFavorite(meta.pathWord, true)
     nav.openDetail(meta.pathWord)
 }
 
@@ -274,24 +381,26 @@ private fun toggleShelf(db: Db, meta: ComicMeta) {
 }
 
 /**
- * GRID / LIST 共用：无限加载页脚（可見即攞下一頁）。
+ * GRID / LIST 共用：無限加載頁腳（可見即攞下一頁，鏈式分批直載到全站尾）。
+ * 重觸發 key 用 batchTick（批次計數）而唔係 shown.size — 舊版重複条目被 distinctBy
+ * 吸走時 size 冇郁 → LaunchedEffect 唔再觸發 → 用戶投訴「只顯示幾十個」。
+ * 進度以 offset（已fetch 遊標）計，同客戶端 tagFilter 篩選嘅 shown 數量無關。
  * 防呆（2026-11-17 ADB 實測踩出）：上一頁失敗（error≠null）時絕對唔好自動重fetch —
- * 否则 loading 翻 false → LaunchedEffect 重触发 → 死循环重试，
- * 每次失败再 invalidateBase → 域名探测风暴（每 0.6 秒 3 个网络请求，烧网烧电）。
+ * 否則 loading 翻 false → 死循環重試 → invalidateBase → 域名探測風暴燒網燒電。
  */
 @Composable
-private fun LoadMoreFooter(loading: Boolean, total: Int?, shownSize: Int,
+private fun LoadMoreFooter(loading: Boolean, total: Int?, offset: Int, batchTick: Int,
                            retryOk: Boolean, loadMore: suspend () -> Unit) {
-    LaunchedEffect(shownSize, loading, retryOk) {
-        if (!loading && retryOk && (total == null || shownSize < (total ?: 0))) loadMore()
+    val finished = total != null && offset >= total
+    LaunchedEffect(batchTick, loading, retryOk) {
+        if (!loading && retryOk && !finished) loadMore()
     }
-    val done = total != null && shownSize >= (total ?: 0)
     Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
         if (loading) CircularProgressIndicator(Modifier.size(28.dp))
         else if (!retryOk) Text("加載更多失敗 — 撳上方「刷新」重試",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
-        else if (done) Text("—— 全部 $total 部已載完 ——",
+        else if (finished) Text("—— 全部 $total 部已載完 ——",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

@@ -5,6 +5,21 @@ Android APK：喺手機/平板 **搜尋瀏覽 → 收藏 → 下載 → 離線�
 **v0.3.2 起品牌統一為「KIECOMIC」**（launcher 名稱／icon／全局標題欄均係，
 LOGO 素材 `res/drawable-nodpi/kie_logo.png`）。
 
+## v0.3.4 第二版重點（2026-11-18 深夜，同版號迭代）
+
+- ♾️ **全站分批 LAZYLOAD 根治**：載入狀態機重做 — 單飛 `pageJob`（轉 filter 即 cancel 舊請求）
+  ＋世代號防舊結果污染；`snapshotFlow` 主動預取（距底 10 格即拉下一頁）；被攔截 shell 頁
+  如實報錯停鏈（防探測風暴）；OkHttp 超時 12/25/callTimeout 30s 快 fail（AGENTS.md 知識庫 #26）
+- 🏷 **題材分類 FILTER**：65 個站點原生題材 `?theme=` 服務端過濾＋已揀 chip
+- 📚 **閱讀過≠放書架**＋啟動 3 秒後 `LibraryCleaner` 自動清理「已下載但冇放書架」內容
+- 🗃 **設置「更新倉庫」**：全站清單快照（`repo` 表 runTs 蓋印制）只統計套數增減、
+  `repo_run` kv 斷點續跑、完成摘要跨啟動重現
+- 🔄 **GitHub 檢查更新**：啟動查 Releases `android-vX.Y.Z`（12 小時節流＋kv 快取），
+  有新版彈一次 dialog → 瀏覽器開 Release 頁下載
+- 🔔 **書架新章系統通知**：ListUpdater 發現新章 → Android 通知（channel 書架新章節；
+  設置頁開關 kv `notify_ch` 默認開；Android 13+ POST_NOTIFICATIONS 運行時授權）
+- 💾 **備份匯出／匯入**：SAF JSON（用戶設置白名單＋書架全行），換機秒搬；圖片唔納入
+
 ## v0.3.4 重點（2026-11-18）
 
 - 🔀 **跨章雙向著陸鐵律**：第 1 頁做「上一頁」→ 上一章**尾頁**；最後一頁做「下一頁」→

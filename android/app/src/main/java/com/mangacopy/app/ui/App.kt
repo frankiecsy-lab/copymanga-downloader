@@ -1,5 +1,7 @@
 package com.mangacopy.app.ui
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -13,6 +15,7 @@ import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -21,14 +24,17 @@ import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -36,10 +42,15 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.mangacopy.app.data.AppConfig
 import com.mangacopy.app.data.Db
+import com.mangacopy.app.data.UpdateChecker
 import com.mangacopy.app.download.DownloadEngine
+import com.mangacopy.app.download.LibraryCleaner
 import com.mangacopy.app.download.ListUpdater
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * App 外殼 — 手機/平板自適應導航（穩定 API 手寫版）：
@@ -71,15 +82,21 @@ fun App() {
     val useRail = widthDp >= 840
     val nav = rememberNavController()
 
-    // 用戶要求：每次打開 App 背景自動檢查書架新章節 —
-    // 啟動 3 秒後（等 UI 先渲染好）跑 ListUpdater（只渲染詳情頁、唔會開落圖片）
+    // 用戶要求：每次打開 App 背景自動保養 —
+    // 啟動 3 秒後（等 UI 先渲染好）：
+    // ① 清理「已落圖但冇放書架」嘅內容（用戶 2026-11-18：閱讀過唔算收藏）
+    // ② 再跑 ListUpdater 檢查書架新章節（只渲染詳情頁、唔會開落圖片）
     LaunchedEffect(Unit) {
         delay(3_000)
         val db = Db.get()
+        withContext(Dispatchers.IO) {
+            runCatching { LibraryCleaner.run(db) }
+        }
         val favs = db.favoritePathWords()
         if (favs.isNotEmpty() && !DownloadEngine.isRunning && !ListUpdater.isRunning) {
             ListUpdater.start(favs)
         }
+        UpdateChecker.onAppStart()   // GitHub 檢查更新（12 小時節流；有新版先彈一次）
     }
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
@@ -127,6 +144,10 @@ fun App() {
     // 閱讀器 = 全屏沉浸式：隱底欄/側欄（用戶要求無感睇漫）
     val inReader = currentRoute?.startsWith("reader") == true
 
+    val context = LocalContext.current
+    val update by UpdateChecker.state.collectAsState()
+
+    Box(Modifier.fillMaxSize()) {
     CompositionLocalProvider(LocalScreenWidthDp provides widthDp) {
         if (inReader) {
             androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) { navContent() }
@@ -173,6 +194,33 @@ fun App() {
             }
         }
     }
+
+    // GitHub 新版本 dialog（用戶 2026-11-18：「有更新要在打開APP時提醒一次」）—
+    // acknowledge() 記低已確認版本，同一版號只彈一次；「去下載」開瀏覽器 Release 頁
+    update?.let { u ->
+        AlertDialog(
+            onDismissRequest = { UpdateChecker.acknowledge() },
+            title = { Text("發現新版本 v${u.version}") },
+            text = {
+                Text("當前 v${AppConfig.VERSION_NAME} → 最新 v${u.version}。\n" +
+                    "撳「去下載」用瀏覽器開啟 GitHub Release 頁面下載新 APK。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(u.url))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }
+                    UpdateChecker.acknowledge()
+                }) { Text("去下載") }
+            },
+            dismissButton = {
+                TextButton(onClick = { UpdateChecker.acknowledge() }) { Text("知道") }
+            },
+        )
+    }
+    }   // Box（content + dialog overlay）
 }
 
 /** 跳去詳情頁。 */
