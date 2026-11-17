@@ -27,10 +27,12 @@ object ReaderPrefs {
     const val IMMERSIVE = "read_immersive"   // 用戶：「全屏唔顯示 UI，按一下中間先顯示」
 
     fun mode(db: Db) = db.getMeta(MODE, "paged")
-    fun rtl(db: Db) = db.getMeta(RTL, "true") != "false"
+    // 用戶（2026-11-18）：右→左閱讀方向**默認關閉**（一般左→右）；想睇漫畫式要自己去設置/閱讀器開
+    fun rtl(db: Db) = db.getMeta(RTL, "false") == "true"
     fun spread(db: Db) = db.getMeta(SPREAD, "false") != "false"
     fun keepScreenOn(db: Db) = db.getMeta(KEEP_SCREEN_ON, "true") != "false"
-    fun immersive(db: Db) = db.getMeta(IMMERSIVE, "false") == "true"
+    // 用戶（2026-11-18）：全屏模式**默認開啓**；關閉＝上方 UI＋進度條常駐
+    fun immersive(db: Db) = db.getMeta(IMMERSIVE, "true") != "false"
 }
 
 /**

@@ -1,5 +1,36 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-18 — 改進：KIECOMIC Android v0.3.4（跨章雙向著陸鐵律 ＋ 全屏/閱讀方向默認反轉 ＋ 流水定位加固）
+
+### 🔀 跨章雙向著陸鐵律（用戶：「每話第一頁做上一頁，必須返回上一話**最後一頁**；最後一頁做下一頁，必須係下一話**第一頁**」）
+- `gotoChapter(id, land)` 加降落頁 sentinel：`land=0`＝第 1 頁／`land=Int.MAX_VALUE`＝尾頁／
+  `null`＝還原該章 readPos（手動開章照舊返去睇開嗰頁）；8 個跨章呼叫點全部按方向標注
+  （next 系→0、prev 系→MAX），`pendingRestore = landOverride ?: db.readPos(...)`
+- **根治流水尾頁著陸失準**：背景落圖（imgTick→placeholder 換真圖高度突变）會推走剛
+  `scrollToItem` 定位嘅位置（實測 tgt=14 最終停 6；入章 readPos 恢復 tgt=5 直接冇郁—
+  即流水恢復從來未企穩過）→ 定位後驗證＋補跳（最多 3 次×120ms）；尾頁未落圖時 LazyColumn
+  clamp 到尾（`canScrollForward=false`）視作已企穩，唔使再補
+- **根治 footer 假可見無故跳章**：未落盤佔位頁好短，成 14 個 item＋footer 全部排得落
+  viewport → 睇緊第 1 頁都誤判「睇到尾」→ 無操作都被掟去下一章；補硬
+  `firstVisibleItemIndex >= totalPages - 2` 先容許 footer 自動接章（AGENTS.md 知識庫 #25）
+- **根治舊章 prog 污染量程**：切章瞬間 `totalPages = max(舊章 total, pages.size)` 用住
+  上一章殘留進度做假量程 → `gotoChapter` 內**同步** reset `prog=Prog(true,0,0)`
+- 向後跨章落尾頁瞬間 footer 已可見 → `landedAtTail` 旗壓住自動接（用戶翻返上頁即復活），
+  唔會一降落又俾 footer 掟返去下一章
+- 實機回归（Realme 1264×2780）：翻頁模式 227 p1→226 尾 13/13、226 尾→227 p1 1/14 ✓；
+  流水向後 218 p1→217 尾（tgt=MAX→13，落圖期間 clamp 尾視覺到尾）✓；流水向前
+  `restore tgt=0 settle vis=0`→218 第 1 頁 ✓；流水入章 readPos 恢復 tgt=1 企穩 ✓
+
+### 🖥 全屏模式默認**開啓**（用戶定稿：「關閉全屏＝上方 UI＋進度條**常駐**」）
+- kv `read_immersive` 默認 true：默認全收 UI、tap 中央方型區喚醒（頂欄＋滑杆＋藥丸同顯）、
+  5 秒自動收返；**OFF 時頂欄＋進度條＋頁碼藥丸常駐**（倒數只喺 immersive=true 先生效）
+- 5 秒倒數條件收緊做 `showBar && immersive && !showSheet`（開緊設定 sheet 唔會倒數收欄）
+
+### 📖 閱讀方向默認**關閉**右→左（用戶：「右>左 默認關閉」）
+- kv `read_rtl` 默認 false＝一般左→右；想睇漫畫式翻頁去設置／閱讀器設定自己開
+
+- 版本 0.3.4（versionCode 7）；三件套 testDebugUnitTest、assembleDebug、lintDebug 全過
+
 ## 2026-11-17 — 改進：KIECOMIC Android v0.3.3（雙擊還原縮放 ＋ 閱讀點擊中央方型區 ＋ 底欄矮化）
 
 ### 🤏 放大後「按兩下」返回原大小

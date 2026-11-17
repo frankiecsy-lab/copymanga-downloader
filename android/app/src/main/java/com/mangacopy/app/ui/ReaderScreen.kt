@@ -82,8 +82,9 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
     var rtl by remember { mutableStateOf(ReaderPrefs.rtl(db)) }
     var spread by remember { mutableStateOf(ReaderPrefs.spread(db)) }
     var keepOn by remember { mutableStateOf(ReaderPrefs.keepScreenOn(db)) }
-    // 全屏模式（用戶 2026-11-17：「閱讀模式加一個全屏唔顯示 UI，按一下中間位置先顯示」）—
-    // ON = 工具欄/滑杆/頁碼藥丸全部收；點擊中間（原有 showBar 切換）先喚返 UI
+    // 全屏模式（用戶 2026-11-17：「閱讀模式加一個全屏唔顯示 UI，按一下中間位置先顯示」；
+    // 2026-11-18 改默認開啓）— ON = 工具欄/滑杆全收，點擊中間先喚返、5 秒自動收；
+    // OFF = 上方 UI＋進度條常駐
     var immersive by remember { mutableStateOf(ReaderPrefs.immersive(db)) }
     var showBar by remember { mutableStateOf(true) }
     var showSheet by remember { mutableStateOf(false) }
@@ -91,8 +92,10 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
     // 用戶（2026-11-17）：「點擊中間顯示 UI..5 秒後自動切換全屏模式」—
     // UI 顯現（入場／點中間喚醒）後 5 秒無操作即自動收起變全屏；
     // key 帶 showSheet：設定 sheet 開緊時暫停倒數，收返 sheet 先重新計 5 秒
-    LaunchedEffect(showBar, showSheet) {
-        if (showBar && !showSheet) {
+    // 用戶（2026-11-18）：5 秒自動收只喺**全屏模式**生效 — 關閉全屏即常规閱讀，
+    // 上方 UI＋進度條常駐唔會自動收
+    LaunchedEffect(showBar, showSheet, immersive) {
+        if (showBar && immersive && !showSheet) {
             delay(5_000)
             showBar = false
         }
@@ -183,7 +186,16 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
 
     // --- 進度記憶：入章恢復 readPos；閱讀中 300ms debounce 持續保存 ---
     // mode 入 key：翻頁↔流水切換都要重新行恢復邏輯 → 落返當前進度（唔會彈返第 1 頁）
-    val pendingRestore = remember(currentCid, mode) { db.readPos(slug, currentCid) }
+    // 跨章著陸覆寫（用戶 2026-11-18 雙向指令：「第一頁上一頁必須返上一章最後一頁；
+    // 最後一頁下一頁必須去下一章第一頁」）— null＝還原該章儲存進度（只限由詳情頁
+    // 手動開章）；0＝著陸第 1 頁；Int.MAX_VALUE＝著陸尾頁（restore 邏輯等量程尘埃
+    // 落定先跳 totalPages-1，未齊頁期間 switching 屏蔽旗照樣壓住 auto 跳章）
+    var landOverride by remember { mutableStateOf<Int?>(null) }
+    val pendingRestore = remember(currentCid, mode) { landOverride ?: db.readPos(slug, currentCid) }
+    // 落尾頁著陸（向後跨章）→ 暫壓流水 footer 自動接下一章：13/13 著陸瞬間 footer
+    // （idx=totalPages）可能就喺 viewport 內，auto-advance 照 firing 會即刻掟返去
+    // 下一章做永動機；用家滾離尾頁兩頁後自動復活
+    var landedAtTail by remember(currentCid) { mutableStateOf(false) }
     // 2026-11-17 實測連環跳章修復：舊版 readPos=0 時 restoreDone 直接 true → 跨章
     // 第一幀就清 switching 屏蔽旗，而 pager 此刻仲 clamp 緊舊章 index（尾卡/頭卡位）
     // → 尾卡 auto-advance／頭卡 auto-prev 喺窗口期連環誤觸發（實測 23卷→24卷→25卷附錄
@@ -206,11 +218,28 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
             if (mode == "paged")
                 pagerState.scrollToPage(((if (useSpread) tgt / 2 else tgt))
                     .coerceIn(0, (units.size - 1).coerceAtLeast(0)) + if (headCard) 1 else 0)
-            else
+            else {
                 listState.scrollToItem(tgt)
+                // 跨章瞬間背景仍落圖（imgTick → units 重組、placeholder 換真圖高度突变）
+                // → 剛定位嘅 scroll position 會被 re-layout 推走（2026-11-18 實測：
+                // 尾頁著陸 tgt=14 最終停喺 6；入章恢復 tgt=5 直接冇郁）。
+                // 等 layout 企穩後驗證，偏咗就補 scrollToItem（最多 3 次）。
+                // canScrollForward=false ⇒ 已 clamp 到尾（尾頁＋footer 全可見，
+                // 佔位頁未落圖時 firstVisible 恒差一頁都係視覺到尾）— 唔使再補
+                var tries = 0
+                while (tries < 3 && listState.firstVisibleItemIndex != tgt &&
+                    listState.canScrollForward
+                ) {
+                    delay(120); tries++
+                    if (listState.firstVisibleItemIndex != tgt) listState.scrollToItem(tgt)
+                }
+            }
             restoreDone = true
+            landOverride = null
+            landedAtTail = tgt >= totalPages - 1
         } else if (!prog.rendering && pages.isEmpty()) {
             restoreDone = true   // 死章（error 零頁）都要解除屏蔽旗，唔可以 forever 擋住
+            landOverride = null
         }
         // 只有恢復真正完成（企穩喺目標頁）先解除屏蔽；等頁期間保持 true 擋住誤觸發
         if (restoreDone) switching.value = false
@@ -258,10 +287,20 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
     // 記錄「呢部漫畫讀到邊章」（詳情頁「繼續閱讀」按鈕用）
     LaunchedEffect(slug, currentCid) { db.setMeta("last_read:$slug", currentCid) }
 
-    // 切章統一入口：先存走而家嗰章嘅 readPos（跨章回來時無縫恢復位置）
-    val gotoChapter: (String) -> Unit = { id ->
+    // 切章統一入口：先存走而家嗰章嘅 readPos。
+    // land = 跨章著陸覆寫（0＝下一章第 1 頁／Int.MAX_VALUE＝上一章尾頁）—
+    // 必須喺 currentCid 變更前同步寫入，pendingRestore 重算先至讀到新值
+    val gotoChapter: (String, Int) -> Unit = { id, land ->
         runCatching { db.saveReadPos(slug, currentCid, curPos.value) }
+        landOverride = land
         switching.value = true
+        // 同步重置 prog：totalPages=max(prog.total, pages.size) — 旧章 prog 殘留
+        // （如 227 嘅 total=14/rendering=false final state）會令新章第一幀用假量程
+        // 恢復：尾頁著陸被 clamp 去假尾/footer，再俾 LazyColumn 新 key 重置回頂
+        // →「落尾頁變落 p1」（2026-11-18 流水實測）。置 rendering=true 後，恢復
+        // effect 會等新章真・量程到手先跳
+        prog = ChapterPreloader.Prog(true, 0, 0)
+        imgTick++
         currentCid = id
     }
     val goNext: () -> Unit = {
@@ -272,7 +311,7 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
             if (totalPages > 0 && listState.firstVisibleItemIndex < totalPages - 1)
                 scope.launch { listState.animateScrollToItem(listState.firstVisibleItemIndex + 1) }
             // 本章未備齊唔准跳：留喺尾頁畀預載器繼續補（用戶：睇晒成話先去下一章）
-            else if (nextCid != null && chapterComplete) gotoChapter(nextCid!!)
+            else if (nextCid != null && chapterComplete) gotoChapter(nextCid!!, 0)
         }
     }
     val goPrev: () -> Unit = {
@@ -280,12 +319,18 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
             // 頭卡 = index 0；第 1 頁 = index 1 → 喺第 1 頁再「返前」直接跨章
             if (pagerState.currentPage > 1)
                 scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
-            else if (prevCid != null) gotoChapter(prevCid!!)   // 第一頁← = 無縫回上一章（readPos 落返尾頁）
+            // 第一頁←＝無縫回上一章**最後一頁**（用戶 2026-11-18：唔好落返第一章/舊進度）
+            else if (prevCid != null) gotoChapter(prevCid!!, Int.MAX_VALUE)
         } else {
             if (listState.firstVisibleItemIndex > 0)
                 scope.launch { listState.animateScrollToItem(listState.firstVisibleItemIndex - 1) }
-            else if (prevCid != null) gotoChapter(prevCid!!)
+            else if (prevCid != null) gotoChapter(prevCid!!, Int.MAX_VALUE)  // 流水頂←＝上一章尾頁
         }
+    }
+
+    // 用家由尾頁向回滾兩頁 → 解除 landedAtTail 抑制（恢復 footer 自動接續）
+    LaunchedEffect(curPos.value, totalPages) {
+        if (landedAtTail && curPos.value < totalPages - 2) landedAtTail = false
     }
 
     // 自動接下一章（翻頁）：停落尾卡 + 本章齊頁 + 下一章備好 → 無縫切過去
@@ -293,7 +338,7 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
         nextProg.done, nextProg.error, switching.value) {
         if (mode == "paged" && !switching.value && tailCard && chapterComplete &&
             pagerState.settledPage == units.size + 1 && (nextReady || nextProg.error != null)
-        ) gotoChapter(nextCid!!)
+        ) gotoChapter(nextCid!!, 0)
     }
     // 自動接上一章（翻頁，用戶 2026-11-17：「滑動上一頁要可以回上一章」）：
     // 頭卡（index 0）係一張真頁 — 喺第 1 頁再往回頭方向掃就落到佢身上。
@@ -308,7 +353,7 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
             // prev 只記「對上一個非 0 頁」：拖去頭卡途中 (0,scrolling=true) 都係
             // emit，若照寫會將 prev 洗成 0 → 企穩時判唔到「由內容頁掃落嚟」
             if (pg != 0) prev = pg
-            if (pg == 0 && !scr && prev >= 1 && !switching.value) gotoChapter(prevCid)
+            if (pg == 0 && !scr && prev >= 1 && !switching.value) gotoChapter(prevCid, Int.MAX_VALUE)
         }
     }
     // 自動接下一章（流水）：footer 可見 + 本章齊頁 + 下一章備好
@@ -317,11 +362,17 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
         if (mode != "scroll" || switching.value || !chapterComplete || nextCid == null)
             return@LaunchedEffect
         androidx.compose.runtime.snapshotFlow {
-            listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-        }.collect { idx ->
-            // footer 索引 = totalPages（占位制下 items 量程）；未備齊都唔會誤觸發
-            if (idx >= totalPages && totalPages > 0 && (nextReady || nextProg.error != null))
-                gotoChapter(nextCid!!)
+            listState.firstVisibleItemIndex to
+                (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1)
+        }.collect { (first, idx) ->
+            // footer 索引 = totalPages（占位制下 items 量程）；未備齊都唔會誤觸發；
+            // 向後跨章落尾頁嘅瞬間 footer 已可見 → landedAtTail 壓住（手撳尾卡照通）。
+            // ⚠️ 2026-11-18 實測：未落盤佔位頁好短，成章 14 個 item + footer 全部
+            // 排得落 viewport → 睇緊 p1 「footer 可見」都成立 → 無故被掟去下一章。
+            // 補硬條件：首可見頁要真係去到尾頁附近（≥totalPages-2）先算「睇到尾」
+            if (idx >= totalPages && first >= totalPages - 2 && totalPages > 0 &&
+                !landedAtTail && (nextReady || nextProg.error != null)
+            ) gotoChapter(nextCid!!, 0)
         }
     }
 
@@ -408,7 +459,7 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                         error = if (chapterComplete) nextProg.error else prog.error,
                         fillHeight = false,
                         modifier = Modifier.fillMaxWidth()
-                            .clickable { if (chapterComplete) gotoChapter(nextCid!!) },
+                            .clickable { if (chapterComplete) gotoChapter(nextCid!!, 0) },
                     )
                     else if (!chapterComplete)
                         Text("本章背景加載緊 ${prog.done}/$totalPages 頁…",
@@ -440,7 +491,7 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                             title = chapters.getOrNull(chapterIndex - 1)?.title,
                             hasPrev = prevCid != null,
                             modifier = Modifier.fillMaxSize()
-                                .clickable { if (prevCid != null) gotoChapter(prevCid!!) },
+                                .clickable { if (prevCid != null) gotoChapter(prevCid!!, Int.MAX_VALUE) },
                         )
                     }
                     return@HorizontalPager
@@ -459,7 +510,7 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                             // 未備齊呢話 = 尾卡只做進度板，唔係跳章出口（用戶：睇晒成話先轉）
                             modifier = Modifier.fillMaxSize()
                                 .clickable {
-                                    if (nextCid != null && chapterComplete) gotoChapter(nextCid!!)
+                                    if (nextCid != null && chapterComplete) gotoChapter(nextCid!!, 0)
                                 },
                         )
                     }
@@ -518,7 +569,9 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
         // 滑杆拖曳狀態（頁碼藥丸共用：拖嘅時候即時顯示目標頁）
         var dragF by remember { mutableStateOf<Float?>(null) }
         var lastSeek by remember { mutableStateOf(-1) }
-        // 全屏模式：滑杆都收返，靠點擊中間 showBar 一齊顯/收（用戶要求）
+        // 進度條與上方 UI 同步（用戶 2026-11-18：「進度條要跟上方 UI 自動隱藏；
+        // 關閉全屏時上方 UI 同進度條常駐」）— 全屏 ON：跟 showBar 同顯同收（含 5 秒自動收）；
+        // 全屏 OFF：連同頂欄一齊常駐
         if (totalPages > 1 && (!immersive || showBar)) {
             val scale = totalPages - 1
             val shown = dragF
@@ -588,8 +641,8 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
             }
         }
 
-        // 工具欄（點擊中間出/收）
-        AnimatedVisibility(visible = showBar, enter = fadeIn(), exit = fadeOut()) {
+        // 工具欄：全屏 ON＝tap 中間出/收＋5 秒自動收；全屏 OFF＝常駐（用戶 2026-11-18）
+        AnimatedVisibility(visible = showBar || !immersive, enter = fadeIn(), exit = fadeOut()) {
             Column(Modifier.fillMaxSize()) {
                 Surface(color = Color.Black.copy(alpha = 0.82f)) {
                     Row(

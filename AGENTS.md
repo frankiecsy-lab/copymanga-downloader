@@ -175,4 +175,9 @@
 * **【正確資源】**：[Compose LazyGridItemSpanScope 文檔](https://developer.android.com/reference/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemSpanScope)（span lambda 簽名 `LazyGridItemSpanScope.(index: Int) -> GridItemSpan`，receiver 提供 `maxLineSpan`）。
 * **【解決/避坑方案】**：全行 span 一律 `span = { GridItemSpan(maxLineSpan) }`（scope 內自動係當前行總格數，動態列數都啱）。同理 LazyColumn 用 `LazyItemSpanScope.maxLineSpan`。改 span 類代碼後一定要用「結果不足一屏」嘅搜尋（例如 gantz→3 部）觸發頁腳 compose 先至验到。
 
+#### 25. 流水跨章著陸三大陷阱：re-layout 推走定位／footer 假可見／舊章 prog 污染量程
+* **【問題/限制】**（2026-11-18 實測三连）：① LazyColumn `scrollToItem(tgt)` 之後背景仲緊落圖（imgTick→placeholder 換真圖高度突变）→ 啱啱定位好嘅 scroll position 被 re-layout 推走（尾頁 tgt=14 最終停喺 6；入章 readPos 恢復 tgt=5 直接冇郁 — 即流水恢復從來未企穩過）；② 未落盤嘅佔位頁好短，成話 14 個 item＋footer 一次排得落成個 viewport → 「footer 可見」做自動接章條件會喺睇緊第 1 頁時都成立 → 無操作都被掟去下一章；③ 切章瞬間 `totalPages = maxOf(prog.total, pages.size)` — prog 係 remember 實例，未及 reset 就係**上一章**嘅 total，新章第一幀用住假量程將尾頁 readPos clamp 錯位置。
+* **【正確資源】**：[Compose LazyListState 文檔](https://developer.android.com/reference/kotlin/androidx/compose/foundation/lazy/LazyListState)（`canScrollForward`：已 clamp 到內容尾嘅權威訊號；layoutInfo 喺 re-layout 前後會變，snapshotFlow 先見真值）。
+* **【解決/避坑方案】**（`ReaderScreen.kt` 已寫入，Realme 實機回归）：① 定位後 **settle 驗證＋補跳**：`while (tries<3 && firstVisibleItemIndex != tgt && canScrollForward) { delay(120); scrollToItem(tgt) }` — `canScrollForward=false` 即尾頁＋footer 全可見（佔位頁未落圖时 firstVisible 恒差一頁都係視覺到尾），唔使白補；② footer 自動接章要 **雙條件**：`lastVisible >= totalPages && firstVisible >= totalPages - 2`；向後跨章落尾頁瞬間 footer 已可見 → `landedAtTail` 旗壓住自動接，用戶翻返上頁（curPos < total-2）即復活；③ `gotoChapter` 內**同步**（唔靠 effect）`prog = Prog(true,0,0)` 再改 currentCid；④ 跨章降落頁用 sentinel 參數 `land`（0=第1頁／Int.MAX_VALUE=尾頁／null=還原 readPos），`pendingRestore = remember(currentCid, mode){ landOverride ?: readPos }`，restore 完成即清 landOverride — 跨章鐵律「第1頁→上一章尾／尾頁→下一章第1頁」同「手動開章還原自己 readPos」共用一條 restore 路徑。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*

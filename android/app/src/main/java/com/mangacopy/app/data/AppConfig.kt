@@ -6,7 +6,7 @@ package com.mangacopy.app.data
  */
 object AppConfig {
     /** App 版本 — title bar「KIECOMIC vX.Y.Z」顯示用；改版本時同 build.gradle.kts 一起改。 */
-    const val VERSION_NAME = "0.3.3"
+    const val VERSION_NAME = "0.3.4"
     const val BASE_URL = "https://www.mangacopy.com"
 
     /**

@@ -5,6 +5,17 @@ Android APK：喺手機/平板 **搜尋瀏覽 → 收藏 → 下載 → 離線�
 **v0.3.2 起品牌統一為「KIECOMIC」**（launcher 名稱／icon／全局標題欄均係，
 LOGO 素材 `res/drawable-nodpi/kie_logo.png`）。
 
+## v0.3.4 重點（2026-11-18）
+
+- 🔀 **跨章雙向著陸鐵律**：第 1 頁做「上一頁」→ 上一章**尾頁**；最後一頁做「下一頁」→
+  下一章**第 1 頁**（`gotoChapter(id, land)` sentinel：0=第1頁／MAX=尾頁／null=還原 readPos，
+  手動開章照舊返去睇開嗰頁）；流水定位加 settle 補跳＋尾 clamp 识别；footer 假可見
+  （佔位頁太短全部排得落 viewport）補硬 `first>=total-2` 閘；切章同步 reset prog 防舊章量程污染
+  （AGENTS.md 知識庫 #25）
+- 🖥 **全屏默認開啓**；關閉全屏＝頂欄＋進度條＋藥丸**常駐**（用戶定稿）
+- 📖 **閱讀方向默認左→右**（右→左改做手動開）
+- 版本 0.3.4（versionCode 7）
+
 ## v0.3.3 重點（2026-11-17）
 
 - 🤏 **放大後按兩下返回原大小**（雙擊偵測只認放大狀態下嘅純單擊；拖曳/pinch 清鏈）
