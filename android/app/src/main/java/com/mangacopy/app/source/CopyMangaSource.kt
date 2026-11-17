@@ -35,6 +35,10 @@ object CopyMangaSource : MangaSource {
 
     /** 當前可用域名（探測成功先寫入）；任何請求失敗即 invalidate 重新探測。 */
     @Volatile private var cachedBase: String? = null
+    /** 防探測風暴（2026-11-17 ADB 實測）：記低上次成功探測嘅 base + 時間；
+     *  invalidate 後 10 秒內唔再全線掃（舊 base 照用），等真正域名死清先再掃。 */
+    @Volatile private var lastGoodBase: String? = null
+    @Volatile private var lastProbeOkAt = 0L
 
     /** 逐個域名探測（短時限速），第一個返回有效列表頁 HTML 嘅就攞用。 */
     private fun probeBases(): String {
@@ -52,6 +56,8 @@ object CopyMangaSource : MangaSource {
                         if (body.contains("exemptComic-box")) {
                             Log.i("MCWEB", "probe OK base=$base")
                             cachedBase = base
+                            lastGoodBase = base
+                            lastProbeOkAt = System.currentTimeMillis()
                             return base
                         } else Log.w("MCWEB", "probe SKIP base=$base (200 但冇列表marker)")
                     } else Log.w("MCWEB", "probe SKIP base=$base HTTP ${resp.code}")
@@ -64,9 +70,14 @@ object CopyMangaSource : MangaSource {
         throw IOException("所有域名都連唔上（網絡封鎖？最後錯誤：${lastErr?.message}）")
     }
 
-    /** 攞當前域名；未探測過就探一次。 */
-    suspend fun currentBase(): String =
-        cachedBase ?: withContext(Dispatchers.IO) { probeBases() }
+    /** 攞當前域名；未探測過就探一次。剛探過 10 秒內被 invalidate → 返舊 base（防風暴）。 */
+    suspend fun currentBase(): String {
+        cachedBase?.let { return it }
+        lastGoodBase?.let { good ->
+            if (System.currentTimeMillis() - lastProbeOkAt < 10_000) return good
+        }
+        return withContext(Dispatchers.IO) { probeBases() }
+    }
 
     /** 請求失敗時作廢，下次重新探測（域名隨時死，要自動切換）。 */
     fun invalidateBase() { cachedBase = null }

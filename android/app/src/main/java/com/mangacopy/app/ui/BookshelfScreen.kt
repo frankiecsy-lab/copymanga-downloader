@@ -69,7 +69,7 @@ fun BookshelfScreen(nav: NavHostController) {
                     }
                     TextButton(
                         enabled = !listState.running && comics.isNotEmpty(),
-                        onClick = { ListUpdater.start(db.favoritePathWords()) },
+                        onClick = { ListUpdater.start(db.favoritePathWords(), force = true) },
                     ) { Text(if (listState.running) "更新中…" else "全部更新書單") }
                 }
                 Text(
@@ -140,7 +140,7 @@ fun BookshelfScreen(nav: NavHostController) {
                     MenuRow("📖 打開 / 查看章節") { menuFor = null; nav.openDetail(comic.pathWord) }
                     MenuRow("🔄 更新書單（檢查新章節）") {
                         menuFor = null
-                        ListUpdater.start(listOf(comic.pathWord))
+                        ListUpdater.start(listOf(comic.pathWord), force = true)
                     }
                     MenuRow("⬇️ 繼續／重新下載") {
                         menuFor = null

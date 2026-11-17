@@ -1,21 +1,24 @@
 package com.mangacopy.app.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.navigation.NavHostController
@@ -25,18 +28,21 @@ import com.mangacopy.app.download.DownloadEngine
 import com.mangacopy.app.source.SourceRegistry
 
 /**
- * 漫畫詳情 — 章節清單（狀態徽章）+ 下載/檢查更新/閱讀。
- * 章節排序：FlowRow chips 可揀（默認「流式」= 站點原始序）；CBZ vol 序永遠用 title 序不受影響。
- * 點擊章節 = 即時閱讀（未下載章節由 ChapterPreloader 即時預載前 N 張 webp）；
- * 章節右邊「下載」icon = 只排呢章；頂欄「選擇」icon = 批量下載模式。
+ * 漫畫詳情 — 章節 GRID 按鈕 + 開始/繼續閱讀 + 檢查更新。
+ * 章節排序：FlowRow chips 可揀（**默認「章節倒序」**= 最新喺頂，用戶要求）；CBZ vol 序永遠用 title 序不受影響。
+ * 章節 GRID 按鈕 = 開始閱讀呢章（未下載由 ChapterPreloader 即時預載）；
+ * 長按 / 頂欄「選擇」icon = 批量下載模式（用戶要求：刪除逐章下載按鈕，閱讀優先）。
+ * 頂部主按鈕：未睇過 →「開始閱讀 · 第一章」；睇過 →「繼續閱讀 · <上次嗰章>」（kv last_read）。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DetailScreen(nav: NavHostController, slug: String) {
     val db = remember { Db.get() }
     var comic by remember { mutableStateOf(db.getComic(slug)) }
-    // 排序：flow（默認，站點原序）/ title / title_desc / pending_first
-    var sort by remember { mutableStateOf(db.getMeta("chapter_sort", "flow") ?: "flow") }
+    // 排序：title_desc（默認，用戶要求倒序）/ flow（閱讀序）/ title / pending_first
+    var sort by remember { mutableStateOf(db.getMeta("chapter_sort", "title_desc") ?: "title_desc") }
+    // 上次阅读进度（kv last_read:<slug> = cid，ReaderScreen 持續更新）
+    var lastCid by remember { mutableStateOf(db.getMeta("last_read:$slug", null)) }
     val orderOf: (String) -> String = {
         when (it) { "title" -> "title"; "title_desc" -> "title_desc";
                     "pending_first" -> "pending_first"; else -> "flow" }
@@ -47,6 +53,10 @@ fun DetailScreen(nav: NavHostController, slug: String) {
     var loadingChapters by remember { mutableStateOf(false) }
     var loadErr by remember { mutableStateOf<String?>(null) }
     var retryTick by remember { mutableStateOf(0) }
+    // 手動更新章節清單（用戶要求）：renderDetail diff 新章節，唔落圖唔入隊
+    var refreshTick by remember { mutableStateOf(0) }
+    var refreshing by remember { mutableStateOf(false) }
+    var refreshMsg by remember { mutableStateOf<String?>(null) }
     // 章節批次揀選模式（長按開啟）
     var selectMode by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(setOf<String>()) }
@@ -54,27 +64,43 @@ fun DetailScreen(nav: NavHostController, slug: String) {
     // 瀏覽紀錄（入頁即記，重訪更新時間）
     LaunchedEffect(slug) { db.recordHistory(slug) }
 
-    // 入頁即自動載入章節清單（用戶要求）：DB 冇先至 render，引擎跑緊就等
-    LaunchedEffect(slug, chapters.isEmpty(), retryTick) {
-        if (chapters.isEmpty() && !DownloadEngine.state.value.running) {
-            loadingChapters = true
-            loadErr = null
-            try {
-                val d = SourceRegistry.default.detail(slug)
-                db.upsertComic(slug, synopsis = d.synopsis, serialStatus = d.serialStatus)
-                db.addChapters(slug, d.chapters.map { Triple(it.chapterId, it.title, it.url) })
-            } catch (e: Exception) {
-                loadErr = e.message
-            }
-            comic = db.getComic(slug)
-            chapters = db.allChapters(slug, orderOf(sort))
-            loadingChapters = false
+    // 緩存優先 ＋ 背景更新（用戶要求）：DB 有清單即顯示離線紀錄；
+    // 距上次渲染超過 15 分鐘（或手動「更新章節」/重試）先再 renderDetail diff 新章節。
+    // 連結（章節 url／圖片 url）本身就持久喺 DB = 下次下載唔使重新搵連結。
+    LaunchedEffect(slug, retryTick, refreshTick) {
+        if (DownloadEngine.state.value.running) return@LaunchedEffect
+        val lastTs = db.getMeta("chlist_ts:$slug", "0")?.toLongOrNull() ?: 0L
+        val stale = System.currentTimeMillis() - lastTs > 15 * 60_000L
+        if (chapters.isNotEmpty() && !stale && refreshTick == 0 && retryTick == 0) return@LaunchedEffect
+        loadingChapters = chapters.isEmpty()   // 有舊清單就唔好全屏幕「載入中」阻閱讀
+        refreshing = chapters.isNotEmpty()
+        loadErr = null
+        try {
+            val d = SourceRegistry.default.detail(slug)
+            db.upsertComic(slug, synopsis = d.synopsis, serialStatus = d.serialStatus)
+            val before = db.allChapters(slug, "flow").size
+            db.addChapters(slug, d.chapters.map { Triple(it.chapterId, it.title, it.url) })
+            val added = db.allChapters(slug, "flow").size - before
+            db.setMeta("chlist_ts:$slug", System.currentTimeMillis().toString())
+            if (added > 0) refreshMsg = "新增 $added 章"
+            else if (refreshTick > 0) refreshMsg = "已經係最新清單"
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e   // 正常取消（離開頁面）→ 唔好寫入「更新失敗」假訊息
+        } catch (e: Exception) {
+            // 有舊清單就靜默失敗（唔阻離線閱讀）；空清單先報錯俾重試
+            if (chapters.isEmpty()) loadErr = e.message
+            else if (refreshTick > 0) refreshMsg = "更新失敗：${e.message}"
         }
+        comic = db.getComic(slug)
+        chapters = db.allChapters(slug, orderOf(sort))
+        loadingChapters = false
+        refreshing = false
     }
 
     LifecycleResumeEffect(slug) {
         comic = db.getComic(slug)
         chapters = db.allChapters(slug, orderOf(sort))
+        lastCid = db.getMeta("last_read:$slug", null)   // 由閱讀器返嚟 → 刷新「繼續閱讀」目標
         onPauseOrDispose { }
     }
 
@@ -178,21 +204,49 @@ fun DetailScreen(nav: NavHostController, slug: String) {
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(8.dp))
+                    // 主按鈕（用戶要求）：未睇過 = 第一章開始；睇過 = 繼續閱讀上次嗰章
+                    val seenCid = lastCid?.takeIf { id -> chapters.any { it.chapterId == id } }
+                    val firstCid = remember(chapters) {
+                        // 數字升序第一粒 = 「第01话」（2026-11-17 真站實測：flow 首位可能
+                        // 係釘頂嘅「22卷增页」最新附加章，唔係第一章）
+                        db.allChapters(slug, "title").firstOrNull()?.chapterId
+                    }
+                    val readCid = seenCid ?: firstCid
+                    val readTitle = chapters.firstOrNull { it.chapterId == readCid }?.title
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
-                            enabled = !engineState.running,
-                            onClick = {
-                                DownloadEngine.start(listOf(slug))
-                                nav.navigate("downloads") { launchSingleTop = true }
-                            },
-                        ) { Text(if (prog.chDone > 0) "繼續下載" else "開始下載") }
+                            enabled = readCid != null && chapters.isNotEmpty(),
+                            onClick = { readCid?.let { nav.navigate("reader/$slug/$it") } },
+                        ) {
+                            Text(
+                                if (seenCid != null) "繼續閱讀 · ${readTitle ?: ""}"
+                                else "開始閱讀 · ${readTitle ?: "第一章"}",
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 210.dp),
+                            )
+                        }
                         OutlinedButton(
-                            enabled = !engineState.running && chapters.isNotEmpty(),
-                            onClick = {
-                                DownloadEngine.start(listOf(slug), checkUpdates = true)
-                                nav.navigate("downloads") { launchSingleTop = true }
-                            },
-                        ) { Text("檢查更新") }
+                            enabled = !engineState.running && !refreshing,
+                            onClick = { refreshTick++ },
+                        ) {
+                            if (refreshing) {
+                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(6.dp))
+                                Text("更新中…")
+                            } else Text("更新章節")
+                        }
+                        // 2026-11-17 用戶要求：「從頭睇」— 永遠跳數字第一話（第01話/第01卷）
+                        if (seenCid != null) {
+                            OutlinedButton(
+                                enabled = firstCid != null,
+                                onClick = { firstCid?.let { nav.navigate("reader/$slug/$it") } },
+                            ) { Text("從頭睇") }
+                        }
+                    }
+                    refreshMsg?.let {
+                        Text(it, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -248,81 +302,88 @@ fun DetailScreen(nav: NavHostController, slug: String) {
                 }
             }
 
-            LazyColumn(Modifier.fillMaxSize()) {
+            // 章節 GRID 按鈕（用戶要求）：tap = 即時閱讀呢章；長按 / 頂欄選擇 = 批量下載模式
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 104.dp),
+                contentPadding = PaddingValues(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
                 items(chapters, key = { it.chapterId }) { ch ->
-                    val done = ch.status == "done"
-                    val err = ch.status == "error"
                     val isSel = ch.chapterId in selected
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .combinedClickable(
-                                onClick = {
-                                    if (selectMode) {
-                                        selected = if (isSel) selected - ch.chapterId
-                                                    else selected + ch.chapterId
-                                    } else {
-                                        // tap = 即時閱讀模式：未下載章節開卷即即時預載（用戶要求）
-                                        nav.navigate("reader/$slug/${ch.chapterId}")
-                                    }
-                                },
-                                onLongClick = {
-                                    selectMode = true
-                                    selected = if (isSel) selected - ch.chapterId else selected + ch.chapterId
-                                },
-                            )
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (selectMode) {
-                            Checkbox(checked = isSel, onCheckedChange = {
-                                selected = if (it) selected + ch.chapterId else selected - ch.chapterId
-                            })
-                            Spacer(Modifier.width(6.dp))
-                        } else Icon(
-                            when {
-                                done -> Icons.Filled.CheckCircle
-                                err -> Icons.Filled.ErrorOutline
-                                else -> Icons.Filled.RadioButtonUnchecked
-                            },
-                            contentDescription = null,
-                            tint = when {
-                                done -> MaterialTheme.colorScheme.primary
-                                err -> MaterialTheme.colorScheme.error
-                                else -> MaterialTheme.colorScheme.outline
-                            },
-                            modifier = Modifier.size(20.dp),
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            ch.title ?: "章節",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (done) FontWeight.Normal else FontWeight.Medium,
-                            modifier = Modifier.weight(1f),
-                            maxLines = 1,
-                        )
-                        if (done) {
-                            Icon(Icons.AutoMirrored.Filled.MenuBook, "閱讀",
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.primary)
-                            Spacer(Modifier.width(4.dp))
-                        }
-                        // 單章下載 icon（tap 章節本身 = 閱讀，下載要明確撳呢度）
-                        if (!selectMode) IconButton(
-                            enabled = !done && !engineState.running,
-                            onClick = {
-                                DownloadEngine.start(listOf(slug), onlyCids = setOf(ch.chapterId))
-                                nav.navigate("downloads") { launchSingleTop = true }
-                            },
-                            modifier = Modifier.size(34.dp),
-                        ) {
-                            Icon(Icons.Filled.FileDownload, "下載呢章",
-                                modifier = Modifier.size(18.dp),
-                                tint = if (done) MaterialTheme.colorScheme.outline
-                                       else MaterialTheme.colorScheme.primary)
-                        }
-                    }
-                    HorizontalDivider()
+                    ChapterGridButton(
+                        title = ch.title ?: "章節",
+                        done = ch.status == "done",
+                        err = ch.status == "error",
+                        current = ch.chapterId == lastCid,
+                        selectMode = selectMode,
+                        isSel = isSel,
+                        onClick = {
+                            if (selectMode)
+                                selected = if (isSel) selected - ch.chapterId else selected + ch.chapterId
+                            else nav.navigate("reader/$slug/${ch.chapterId}")
+                        },
+                        onLongClick = {
+                            selectMode = true
+                            selected = if (isSel) selected - ch.chapterId else selected + ch.chapterId
+                        },
+                        onCheck = { on ->
+                            selected = if (on) selected + ch.chapterId else selected - ch.chapterId
+                        },
+                    )
                 }
+            }
+        }
+    }
+}
+
+/** 章節 GRID 按鈕：已下載 ✓／出錯紅框／正在閱讀高亮；選擇模式加 Checkbox。 */
+@Composable
+private fun ChapterGridButton(
+    title: String, done: Boolean, err: Boolean, current: Boolean,
+    selectMode: Boolean, isSel: Boolean,
+    onClick: () -> Unit, onLongClick: () -> Unit, onCheck: (Boolean) -> Unit,
+) {
+    val shape = RoundedCornerShape(10.dp)
+    val bg = when {
+        isSel -> MaterialTheme.colorScheme.primaryContainer
+        current -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.surface
+    }
+    Surface(
+        color = bg,
+        shape = shape,
+        border = BorderStroke(1.dp, when {
+            err -> MaterialTheme.colorScheme.error
+            bg != MaterialTheme.colorScheme.surface -> Color.Transparent
+            else -> MaterialTheme.colorScheme.outlineVariant
+        }),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 54.dp)
+            .clip(shape)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (selectMode) {
+                Checkbox(checked = isSel, onCheckedChange = onCheck)
+            } else {
+                if (err) {
+                    Icon(Icons.Filled.ErrorOutline, "出錯", modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.width(3.dp))
+                } else if (done) {
+                    Icon(Icons.Filled.CheckCircle, "已下載", modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(3.dp))
+                }
+                Text(title, style = MaterialTheme.typography.labelMedium,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
             }
         }
     }

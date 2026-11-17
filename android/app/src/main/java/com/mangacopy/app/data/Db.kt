@@ -204,15 +204,36 @@ class Db private constructor(context: Context) :
     )
 
     // ------------------------------------------------------------------ chapters
+    /** 標題入面第一組數字（「第123話」→123）；冇就 null。用嚟偵測章節序方向。 */
+    private fun titleNumber(title: String?): Long? =
+        title?.let { Regex("\\d+").find(it)?.value?.toLongOrNull() }
+
+    /**
+     * 閱讀序正規化：站點詳情頁章節列表可能係「新→舊」（最尾一章排最前）。
+     * 跨章節 auto-next（chapterIndex+1）同「第一章」定義都要 flow=舊→新，
+     * 所以 upsert 前按標題數字偵測方向：頭尾都攞到數字且頭 > 尾 → 反轉。
+     * 攞唔到數字（例：純文字標題）就維持站點原序，唔好亂反。
+     */
+    private fun inReadingOrder(chapters: List<Triple<String, String, String>>)
+        : List<Triple<String, String, String>> {
+        if (chapters.size < 2) return chapters
+        // 2026-11-17 真站實測修：邊緣章節可能係「番外/增页」等冇數字標題（例如最新
+        // 「22卷增页」排第一、最尾一條無號）→ 由兩端向內搵第一粒數字先比較方向
+        val a = chapters.take(12).firstNotNullOfOrNull { titleNumber(it.second) }
+        val b = chapters.reversed().take(12).firstNotNullOfOrNull { titleNumber(it.second) }
+        return if (a != null && b != null && a > b) chapters.reversed() else chapters
+    }
+
     /**
      * 冪等 upsert（同桌面版 add_chapters 一致）：error 章節重設為 pending 以便重試。
-     * sort_index = 传入清單嘅位置（站點詳情頁原始序 = 「流式」顯示序）。
+     * sort_index = 閱讀序位置（經 inReadingOrder 正規化，舊→新 = 「流式」顯示序）。
      */
     fun addChapters(pathWord: String, chapters: List<Triple<String, String, String>>): Int {
         val db = writableDatabase
+        val ordered = inReadingOrder(chapters)
         db.beginTransaction()
         try {
-            for ((i, t) in chapters.withIndex()) {
+            for ((i, t) in ordered.withIndex()) {
                 val (cid, title, url) = t
                 val cur = db.rawQuery(
                     "SELECT status FROM chapters WHERE comic_path_word=? AND chapter_id=?",
@@ -234,6 +255,8 @@ class Db private constructor(context: Context) :
                     )
                 }
             }
+            // （2026-11-17 回滚：曾加「刪滯留卷組行」清理，後實證一拳超人等漫畫
+            // 以「卷」為真實章節單位 — 202 頁巨章就係「第17卷」，刪除會誤殺清單，唔做）
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         return chapters.size
@@ -251,11 +274,23 @@ class Db private constructor(context: Context) :
      *   title_desc / pending_first（未下載／出錯排前面）
      */
     fun allChapters(pathWord: String, order: String = "title"): List<Chapter> {
+        // 2026-11-17 真站實測修：236 章用**字符串**序 →「第99话」排喺「第236话」後面、
+        // 「第10话」喺「第2话」前面，倒序 UI 頂部唔係最新章。title/title_desc 改**數字序**
+        // （標題第一組數字；Kotlin sortedBy 穩定 → 同號/無號以 sort_index 站序做 tie-break；
+        // 無號如「22卷增页」正序排尾、倒序排頭 — 增页本来就係最尾先出嘅附加內容）
+        if (order == "title" || order == "title_desc") {
+            val rows = query(
+                "SELECT * FROM chapters WHERE comic_path_word=? ORDER BY sort_index ASC, title ASC",
+                arrayOf(pathWord)
+            )
+            return if (order == "title")
+                rows.sortedBy { titleNumber(it.title) ?: Long.MAX_VALUE }          // 升序，無號排尾
+            else
+                rows.sortedWith(compareByDescending { titleNumber(it.title) ?: Long.MIN_VALUE })  // 降序，無號排最尾
+        }
         val ord = when (order) {
-            "flow" -> "sort_index ASC, title ASC"
-            "title_desc" -> "title DESC"
             "pending_first" -> "(status='done') ASC, sort_index ASC, title ASC"
-            else -> "title ASC"
+            else -> "sort_index ASC, title ASC"   // flow / 其他一律站序
         }
         return query("SELECT * FROM chapters WHERE comic_path_word=? ORDER BY $ord", arrayOf(pathWord))
     }

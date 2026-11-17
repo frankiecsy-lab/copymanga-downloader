@@ -47,6 +47,7 @@ object ImageDownloader {
             }
             val dest = File(destDir, "%03d".format(pageIndex + 1) + ext)
             for (attempt in 0 until AppConfig.DOWNLOAD_RETRIES) {
+                var missingVariant = false
                 try {
                     val request = Request.Builder().url(cand)
                         .header("User-Agent", AppConfig.USER_AGENT).build()
@@ -57,11 +58,16 @@ object ImageDownloader {
                             val sha = MessageDigest.getInstance("SHA-256").digest(bytes)
                                 .joinToString("") { "%02x".format(it) }
                             return Result(dest, sha, bytes.size.toLong())
-                        } else lastErr = "HTTP ${resp.code}"
+                        }
+                        lastErr = "HTTP ${resp.code}"
+                        // 404 = webp 壓縮變體唔存在 → 即刻 fallback 返原 URL，
+                        // 唔好食 retries sleep（之前每頁白等 1-3 秒 = 「每頁好慢」元兇）
+                        missingVariant = resp.code == 404
                     }
                 } catch (e: Exception) {
                     lastErr = e.message ?: "error"
                 }
+                if (missingVariant) break
                 Thread.sleep(1_000L + attempt * 1_000L)
             }
         }

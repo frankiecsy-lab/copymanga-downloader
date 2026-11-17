@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.mangacopy.app.data.Db
 import com.mangacopy.app.data.Storage
-import com.mangacopy.app.download.ChapterPreloader
 import com.mangacopy.app.download.DownloadEngine
 import com.mangacopy.app.download.ListUpdater
 import com.mangacopy.app.download.Outputs
@@ -45,7 +44,6 @@ fun SettingsScreen() {
     var rtl by remember { mutableStateOf(ReaderPrefs.rtl(db)) }
     var spread by remember { mutableStateOf(ReaderPrefs.spread(db)) }
     var keepOn by remember { mutableStateOf(ReaderPrefs.keepScreenOn(db)) }
-    var preN by remember { mutableStateOf(ChapterPreloader.firstN()) }
     var usedBytes by remember { mutableStateOf(-1L) }
     val listState by ListUpdater.state.collectAsState()
 
@@ -136,7 +134,7 @@ fun SettingsScreen() {
                 Button(
                     enabled = !listState.running && !DownloadEngine.isRunning &&
                             db.favoritePathWords().isNotEmpty(),
-                    onClick = { ListUpdater.start(db.favoritePathWords()) },
+                    onClick = { ListUpdater.start(db.favoritePathWords(), force = true) },
                 ) { Text(if (listState.running) "更新中" else "更新") }
             }
             if (listState.running) {
@@ -168,26 +166,8 @@ fun SettingsScreen() {
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(horizontal = 16.dp))
             }
-            Row(
-                Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("即時閱讀預下載張數")
-                    Text("開卷即刻無感睇：備齊前 N 張 webp 即開讀（其餘背景補落）",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                SingleChoiceSegmentedButtonRow {
-                    listOf(3, 5, 10, 15).forEachIndexed { i, n ->
-                        SegmentedButton(
-                            selected = preN == n,
-                            onClick = { preN = n; db.setMeta("prewebp_n", n.toString()) },
-                            shape = SegmentedButtonDefaults.itemShape(i, 4),
-                        ) { Text("$n", maxLines = 1) }
-                    }
-                }
-            }
+            // 2026-11-17 用戶指令：取消「預下載張數 3/5/10/15」設定 —
+            // 即時閱讀改為一開波即成話全量下載（第 1 頁好即開讀），冇首 N 檔概念
 
             SectionTitle("閱讀默認")
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -250,7 +230,7 @@ fun SettingsScreen() {
 
             SectionTitle("關於")
             Text(
-                "MangaCopy Android 0.2.0\n源碼同桌面版一庫：copymanga-downloader",
+                "MangaCopy Android 0.3.0\n源碼同桌面版一庫：copymanga-downloader",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

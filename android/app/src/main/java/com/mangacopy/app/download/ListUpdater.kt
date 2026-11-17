@@ -44,13 +44,24 @@ object ListUpdater {
 
     val isRunning get() = _state.value.running
 
-    fun start(slugs: List<String>) {
+    fun start(slugs: List<String>, force: Boolean = false) {
         if (job?.isActive == true || slugs.isEmpty()) return
-        _state.update { it.copy(running = true, done = 0, total = slugs.size,
+        // TTL 節流（用戶要求「適當時間自動更新」+ 2026-11-17 ADB 實測：
+        // 每次開 App 都全量重 render 死站詳情頁 = 燒 80 秒 WebView、仲同閱讀器搶鎖）：
+        // 自動觸發跳過 15 分鐘內更新過嘅漫畫；手動按鈕 force=true 照跑。
+        val targets = if (force) slugs else slugs.filter { slug ->
+            val ts = db.getMeta("chlist_ts:$slug", "0")?.toLongOrNull() ?: 0L
+            System.currentTimeMillis() - ts > 15 * 60_000L
+        }
+        if (targets.isEmpty()) {
+            Log.d("MCLIST", "清單都係新（TTL 15分鐘內），跳過自動更新")
+            return
+        }
+        _state.update { it.copy(running = true, done = 0, total = targets.size,
                                 current = "", newChapters = 0, lastError = null) }
         job = scope.launch {
             try {
-                for (slug in slugs) {
+                for (slug in targets) {
                     _state.update { it.copy(current = db.getComic(slug)?.displayName ?: slug) }
                     try {
                         val n = updateOne(slug)
@@ -74,6 +85,7 @@ object ListUpdater {
         val d = SourceRegistry.default.detail(slug)
         db.upsertComic(slug, synopsis = d.synopsis, serialStatus = d.serialStatus)
         val n = db.addChapters(slug, d.chapters.map { Triple(it.chapterId, it.title, it.url) })
+        db.setMeta("chlist_ts:$slug", System.currentTimeMillis().toString())  // TTL 記時
         return (n - existing).coerceAtLeast(0)
     }
 }

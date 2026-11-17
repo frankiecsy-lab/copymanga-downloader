@@ -56,7 +56,10 @@ object WebViewRenderer {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.userAgentString = AppConfig.USER_AGENT
-            settings.loadsImagesAutomatically = true
+            // 2026-11-17 實測：append 嘅 <li> 會觸發 lazyload 真載圖 + webp 解码，
+            // 霸佔 renderer 主線程 → scroll 事件/JS step 由 25/s 跌至 ~1.5/s（後期輪次減速根因）。
+            // 我哋只需要 data-src URL 清單，圖片由 OkHttp 另落 → 呢個 WebView 永遠唔使載圖。
+            settings.loadsImagesAutomatically = false
             settings.useWideViewPort = true
             settings.loadWithOverviewMode = true
             isVerticalScrollBarEnabled = false
@@ -117,15 +120,35 @@ object WebViewRenderer {
           const seen = {};
           document.querySelectorAll('.upLoop a[href*="/chapter/"]').forEach(a => {
             const href = a.getAttribute('href') || '';
-            const m = href.match(/\/comic\/[^/]+\/chapter\/([0-9a-fA-F-]+)/);
+            // 通用擷取（2026-11-17 實測：站點改版後連結未必帶 /comic/{pw} 前綴、
+            // cid 亦未必係 UUID）— 只要 /chapter/{id} 就收
+            const m = href.match(/\/chapter\/([^\/?#]+)/);
             if (!m || seen[m[1]]) return;
+            const t = (a.textContent || '').trim();
             seen[m[1]] = 1;
             out.chapters.push({
               cid: m[1],
-              title: (a.textContent || '').trim(),
+              title: t,
               url: href.startsWith('http') ? href : '__BASE__' + href
             });
           });
+          // 維護兜底（2026-11-17 實測）：站點清單 API 死時 upLoop=空，
+          // 但詳情頁 HTML 仍帶「開始閱讀」真章節直 link → 抽取任何章節 <a> 做最小清單，
+          // 起碼可以真閱讀／下載一章，再經章節頁「下一章」鏈繼續（比完全載入唔到強）。
+          if (!out.chapters.length) {
+            document.querySelectorAll('a[href*="/chapter/"]').forEach(a => {
+              const href = a.getAttribute('href') || '';
+              const m = href.match(/\/chapter\/([^\/?#]+)/);
+              if (!m || seen[m[1]]) return;
+              const t = (a.textContent || '').trim();
+              seen[m[1]] = 1;
+              out.chapters.push({
+                cid: m[1],
+                title: (t && !/閱讀|阅读/.test(t)) ? t : '開始閱讀 · 第1章（清單維護中）',
+                url: href.startsWith('http') ? href : '__BASE__' + href
+              });
+            });
+          }
           const sp = document.querySelector('.comicParticulars-synopsis .theBoxModel-comic-detail-content');
           if (sp) { const t = (sp.textContent || '').trim(); if (t) out.synopsis = t; }
           for (const li of document.querySelectorAll('li')) {
@@ -148,6 +171,15 @@ object WebViewRenderer {
         var tick = 0
         val found = withTimeoutOrNull(40_000L) {
             while (!jsBool("document.querySelectorAll('.upLoop a[href*=\"/chapter/\"]').length > 0")) {
+                // 維護殼偵測（2026-11-17 實測）：12 秒無章節清單但頁內已有任何章節直 link
+                // （開始閱讀按鈕喺 HTML 就喺度）→ 判定清單 API 死，即刻用兜底，
+                // 唔好傻等 40 秒 ×2 次重試（用戶_feedback「基本載入好多分鐘」根因之一）
+                if (tick >= 24 &&
+                    jsBool("document.querySelectorAll('a[href*=\"/chapter/\"]').length > 0")
+                ) {
+                    Log.i("MCWEB", "detail SHELL-FALLBACK t=${tick / 2}s url=$url")
+                    break
+                }
                 // 每 4 秒拍一次位置：追蹤 WAF 跳轉鏈（邊個域名都到唔到終點 page）
                 if (tick++ % 8 == 0) Log.d("MCWEB", "detail poll t=${tick / 2}s js=${js("JSON.stringify([location.href, document.readyState, document.querySelectorAll('a').length])")}")
                 delay(500)
@@ -205,11 +237,6 @@ object WebViewRenderer {
         })()
     """.trimIndent()
 
-    private val LI_COUNT_JS = "document.querySelectorAll('.comicContent-list li').length"
-
-    private val AT_BOTTOM_JS =
-        "window.scrollY + window.innerHeight >= document.body.scrollHeight - 6"
-
     private val IMAGES_JS = """
         (() => {
           const out = [];
@@ -248,33 +275,47 @@ object WebViewRenderer {
         delay(1_500)   // networkidle 等價：畀初始批次嘅請求行完
 
         val total = jsInt(BADGE_JS)
-        var last = -1
         var noProgress = 0
         var step = 0
         var lastEmit = 0
-        val cap = maxOf((total ?: 60) * 3 + 40, 200)
+        val cap = maxOf((total ?: 60) * 2 + 80, 160)
 
         // 第一時間畀一次現有 DOM（通常首 2-5 頁已經喺度）
         parseImagesJson(js(IMAGES_JS)).takeIf { it.isNotEmpty() }?.let {
             lastEmit = it.size
             onPartial(it, total)
         }
+        // 2026-11-17 站點源碼拆包實錘（comic_content_pass202508141534.js，去混淆）：
+        //   window.onscroll = ... if (ul.offsetTop / 16 > scrollY) appendOne()
+        // —— **append 只喺 page 頂部附近先發生**（scrollY < offsetTop/16 ≈ 幾十 px），
+        // 一個合資格 scroll 事件吐一張 <li>；單向滾去底 = 條件永遠唔成立 = 死喺 3 頁
+        // （初載 for 循環只吐 3 張，同實測 li=3 吻合）。
+        // 修正：__mcStep 喺頂部 0↔5px 微振盪 —— 每次調用都改變 scrollY（保證出事件）
+        // 又永遠留喺最低閾值內；配合同頁禁載圖（loadsImagesAutomatically=false）
+        // 解放主線程，先至跑到設計速度。
+        // 實測再進化：真 scroll 要 scroll room、平滑滾動、事件節流等变量（每輪 append
+        // Rate 唔穩）。其實 handler 只需要「一個 scroll 事件 + scrollY 喺低位」—
+        // dispatchEvent 合成事件直接觸發 window.onscroll，scrollY 保持 0（永遠喺閾值內），
+        // 完全唔使郁 page → 每次調用 =  guaranteed +1 頁。
+        js("""
+            window.__mcStep = function () {
+              window.dispatchEvent(new Event('scroll'));
+              return document.querySelectorAll('.comicContent-list li').length;
+            }; void 0
+        """.trimIndent())
         while (step++ < cap) {
-            js("window.scrollBy(0, 500)")
-            delay(AppConfig.CHAPTER_SCROLL_DELAY_MS)
-            js("window.scrollBy(0, -120)")
-            val cur = jsInt(LI_COUNT_JS) ?: 0
-            // 有新頁入 DOM → 增量回調（閱讀器即刻開落）
+            val cur = jsInt("window.__mcStep()") ?: 0
             if (cur > lastEmit) {
                 parseImagesJson(js(IMAGES_JS)).takeIf { it.size > lastEmit }?.let {
                     lastEmit = it.size
                     onPartial(it, total)
                 }
+                noProgress = 0
+            } else if (++noProgress >= 70) {
+                break   // ~2.5 秒連派事件都冇新頁 = 站點真係吐晒，攞住有嘅收工
             }
             if (total != null && cur >= total) break
-            noProgress = if (cur == last) noProgress + 1 else 0
-            if (jsBool(AT_BOTTOM_JS) && noProgress >= 45) break
-            last = cur
+            delay(30)
         }
 
         delay(AppConfig.RENDER_SETTLE_MS)

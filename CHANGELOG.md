@@ -1,5 +1,44 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-17 — 改進：MangaCopy Android v0.3.0（成話全量預載 ＋ 站點章節清單秒取 ＋ 防誤跳閘）
+
+### ⚡ 章節清單秒取（WebViewRenderer，實測 224 頁章 20 秒攞齊）
+- **拆包實錘**：站點附錄頁 JS（`comic_content_pass202508141534.js`，Dean Edwards packer 去混淆）
+  嘅 append 條件係 `ul.offsetTop/16 > scrollY` — **只喺頁面頂部幾十 px 內先吐新頁**，
+  初始 for 循環只 append 3 張 → 舊「振盪滾動」策略大卷死喺 3-4 頁
+- **合成事件法**：`window.dispatchEvent(new Event('scroll'))` 直接觸發 `window.onscroll`，
+  scrollY 恆 0 永遠喺閾值內 → 每次調用 guaranteed +1 頁（224 頁 20 秒 / 206 頁 19 秒）
+- `loadsImagesAutomatically=false`：渲染 WebView 永不載圖（URL 交 OkHttp 另落）—
+  防 lazyload webp 解碼霸佔主線程令 append 由 25/s 跌至 1.5/s
+
+### 📲 預載策略最終形態（开发者指令：唔使首 N 頁，一開波爆落成話）
+- 刪除「即時閱讀預下載張數 3/5/10/15」設定 ＋ `firstN`/Stage A/向前窗口全套分級邏輯
+- `ChapterPreloader` 改補頁循環：渲染→4 lane 升序爆落→未齊頁 4 秒後再渲染攞多啲頁，
+  直到**成話真・齊頁**先標 done＋ensureOutputs＋emit `rendering=false`；
+  20 輪未齊／3 連零進展 → 如實報錯（閱讀器尾卡開逃生門），**嚴禁扮完成**
+- **被動模式 false-complete 修復**：舊版以「pending 空」為完結條件 — 站點未滴完 URL 時
+  誤報完成（實測 89 頁瞬間變返 3 頁→誤跳章）；改只認 done/error 狀態或 done≥expected
+
+### 🚧 防誤跳閘（「唔可以第 4 頁就跳」）
+- 尾卡點擊／footer 點擊／goNext 三處全部 gate `chapterComplete`（＝預載器最終態）；
+  未備齊尾卡顯示「備齊晒成話先至通去下一章」
+- 下一章 preflow 觸發條件收緊：本章齊頁、或真係去到尾前 4 頁先開火
+
+### 🔢 閱讀器修正
+- **數字章節序**：站點 flow 序＝最新排最前 →「下一章」倒退 bug（第17卷跳返第16卷）；
+  ≥90% 標題含數字時改用數字序（21卷→附錄+番外→22卷 正確接續）
+- 常駐頁碼藥丸「第 X / N 頁」（跟拖曳實時更新，尾卡顯示下一章標題）；工具欄副標題加當前頁
+- 設定頁版本字串 0.3.0；`versionName=0.3.0 / versionCode=3`
+
+### 實機 E2E（8 吋 pad 1880×3008 ＋ **真實線上站** copymanga.fun，一拳超人）
+第21卷 224 頁完整睇晒（12 頁連翻 4.2 秒零等待、滑杆 14→214 即跳）→ 尾卡即刻接
+22卷附錄+番外（13 頁 12 tap 零等待）→ 尾卡即刻接第22卷（206 頁已全部備好）；
+未備齊闸「備齊晒成話先至通去下一章」實測生效 — 全部通過（logcat MCPRE/MCWEB 佐證）
+
+### 測試與構建
+`gradle testDebugUnitTest assembleDebug lintDebug` **BUILD SUCCESSFUL**；
+`dist/MangaCopy-android-v0.3.0-debug.apk`（versionName 0.3.0）
+
 ## 2026-11-17 — 新功能：MangaCopy Android APK v0.2.0（無縫跨章節閱讀 ＋ Wave #2 體驗升級）
 
 ### ⚡ 核心：無縫無感下載睇漫畫、跨章節（開發者要求）

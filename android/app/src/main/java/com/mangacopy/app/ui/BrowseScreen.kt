@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.*
@@ -77,6 +78,8 @@ fun BrowseScreen(nav: NavHostController) {
                 }
                 items = (items + page.first).distinctBy { it.pathWord }
                 total = page.second
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e   // 离开页面/重搜的正常取消 → 唔好显示成「载入失败」
             } catch (e: Exception) {
                 error = "載入失敗：${e.message}"
             } finally {
@@ -85,10 +88,26 @@ fun BrowseScreen(nav: NavHostController) {
         }
     }
 
-    // 切關鍵字 / 狀態 = 重來
-    LaunchedEffect(activeQ, statusFilter) {
+    // 全域緩存（用戶要求）：列表/搜尋結果入記憶體緩存 10 分鐘 —
+    // 返嚟即display 舊結果，超時或撳「刷新」先再打站點
+    var forceTick by remember { mutableStateOf(0) }
+    val cacheKey = if (activeQ.isEmpty()) "browse:${statusFilter ?: "all"}" else "search:$activeQ"
+    LaunchedEffect(activeQ, statusFilter, forceTick) {
+        val fresh = forceTick == 0 && ListCache.key == cacheKey &&
+            System.currentTimeMillis() - ListCache.ts < 10 * 60_000L &&
+            ListCache.items.isNotEmpty()
+        if (fresh) {
+            items = ListCache.items; offset = ListCache.offset; total = ListCache.total
+            tagFilter = null; error = null
+            return@LaunchedEffect
+        }
         items = emptyList(); offset = 0; tagFilter = null
         loadPage()
+        if (items.isNotEmpty()) {
+            ListCache.key = cacheKey; ListCache.items = items
+            ListCache.offset = offset; ListCache.total = total
+            ListCache.ts = System.currentTimeMillis()
+        }
     }
 
     // 種類標籤池：累積結果出過嘅 tags（searchcl theme/parodies）
@@ -110,13 +129,18 @@ fun BrowseScreen(nav: NavHostController) {
                     placeholder = { Text("搜尋漫畫名 / 作者…") },
                     leadingIcon = { Icon(Icons.Filled.Search, null) },
                     trailingIcon = {
-                        IconButton(onClick = {
-                            grid = !grid; ListMode.set(db, grid)
-                        }) {
-                            Icon(
-                                if (grid) Icons.Filled.GridView else Icons.Filled.ViewList,
-                                if (grid) "轉列表顯示" else "轉格子顯示",
-                            )
+                        Row {
+                            IconButton(onClick = { forceTick++ }) {
+                                Icon(Icons.Filled.Refresh, "刷新（clear 緩存重載）")
+                            }
+                            IconButton(onClick = {
+                                grid = !grid; ListMode.set(db, grid)
+                            }) {
+                                Icon(
+                                    if (grid) Icons.Filled.GridView else Icons.Filled.ViewList,
+                                    if (grid) "轉列表顯示" else "轉格子顯示",
+                                )
+                            }
                         }
                     },
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -194,7 +218,7 @@ fun BrowseScreen(nav: NavHostController) {
                         )
                     }
                     gridItems(listOf(0)) {
-                        LoadMoreFooter(loading, total, shown.size) { loadPage() }
+                        LoadMoreFooter(loading, total, shown.size, error == null) { loadPage() }
                     }
                 }
             } else {
@@ -206,7 +230,7 @@ fun BrowseScreen(nav: NavHostController) {
                             inShelf = remember(meta, shelfTick) { db.getComic(meta.pathWord)?.favorite == true },
                         )
                     }
-                    item { LoadMoreFooter(loading, total, shown.size) { loadPage() } }
+                    item { LoadMoreFooter(loading, total, shown.size, error == null) { loadPage() } }
                 }
             }
         }
@@ -227,15 +251,24 @@ private fun toggleShelf(db: Db, meta: ComicMeta) {
     db.setFavorite(meta.pathWord, !inShelf)
 }
 
-/** GRID / LIST 共用：无限加载页脚（可見即攞下一頁）。 */
+/**
+ * GRID / LIST 共用：无限加载页脚（可見即攞下一頁）。
+ * 防呆（2026-11-17 ADB 實測踩出）：上一頁失敗（error≠null）時絕對唔好自動重fetch —
+ * 否则 loading 翻 false → LaunchedEffect 重触发 → 死循环重试，
+ * 每次失败再 invalidateBase → 域名探测风暴（每 0.6 秒 3 个网络请求，烧网烧电）。
+ */
 @Composable
-private fun LoadMoreFooter(loading: Boolean, total: Int?, shownSize: Int, loadMore: suspend () -> Unit) {
-    LaunchedEffect(shownSize, loading) {
-        if (!loading && (total == null || shownSize < (total ?: 0))) loadMore()
+private fun LoadMoreFooter(loading: Boolean, total: Int?, shownSize: Int,
+                           retryOk: Boolean, loadMore: suspend () -> Unit) {
+    LaunchedEffect(shownSize, loading, retryOk) {
+        if (!loading && retryOk && (total == null || shownSize < (total ?: 0))) loadMore()
     }
     val done = total != null && shownSize >= (total ?: 0)
     Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
         if (loading) CircularProgressIndicator(Modifier.size(28.dp))
+        else if (!retryOk) Text("加載更多失敗 — 撳上方「刷新」重試",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
         else if (done) Text("—— 全部 $total 部已載完 ——",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -318,4 +351,17 @@ private fun ListRow(meta: ComicMeta, inShelf: Boolean, onClick: () -> Unit, onAd
         }
     }
     HorizontalDivider()
+}
+
+/**
+ * 瀏覽/搜尋結果記憶體緩存（用戶要求「全域盡量緩存」）—
+ * 以 query+filter 做 key，TTL 10 分鐘；App 進程生存期內有效，
+ * 細頁導航返嚟即時 display，超時/手動刷新先再打站點。
+ */
+private object ListCache {
+    @Volatile var key = ""
+    @Volatile var ts = 0L
+    @Volatile var items: List<ComicMeta> = emptyList()
+    @Volatile var offset = 0
+    @Volatile var total: Int? = null
 }

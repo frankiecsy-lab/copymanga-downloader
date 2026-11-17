@@ -120,4 +120,21 @@
 * **【問題/限制】**：詳情頁全线維護 — `.fun` 404「服務器搬遷維護中」、`.site` 5.6KB WAF redirect shell、`.io` 連唔上、`.mangacopy.com` 404 + ASUS 路由器 DNS 劫持（cert CN=blocking.asus.hns.tm）。**唯 searchcl 搜尋 API 只喺 `https://www.copymanga.fun` 存活**（JSON code 200）。
 * **【解決/避坑方案】**：App 維持多域名 fallback 策略；搜尋功能用 `.fun` searchcl；詳情/章節 E2E 用本地假站方法論（見第 10 條）替代，站點復原後再跑真實站回归。
 
+#### 12. CopyManga 章節頁 append 只喺「頁面頂部」發生 — dispatchEvent 合成事件秒殺（224 頁 20 秒）
+* **【問題/限制】**：章節頁圖清單係站點 JS 逐頁 append `<li>`，拆包 `https://s3.mangafunb.fun/static/websitefree/js20190704/comic_content_pass202508141534.js`（Dean Edwards packer＋字符串陣列混淆，6157B）去混淆後實錘：`window.onscroll` 內 **`if (ul.offsetTop/16 > scrollY) 先 append 一張`** — 即 append 只喺頁面頂部幾十 px 內先成立；初始 for 循環只吐 3 張；一個合資格 scroll 事件＝+1 頁。任何「滾去底」策略（單向 scrollBy / 底部振盪）都令條件永遠唔成立 → 大卷死喺 3-4 頁。真 scroll 仲有平滑滾動、事件節流、主線程競爭等變數，每輪 append 率唔穩。
+* **【正確資源】**：上述 ccp JS 檔（瀏覽器 devtools 直接攞）；全圖 URL 清單係 AES-CBC-Pkcs7 加密＋closure 私有（key=全局 cct，外部不可達 — 解密路線死心）；badge `.comicIndex`「N / M」= data.length 即時寫入（總頁數可信）。
+* **【解決/避坑方案】**：`window.dispatchEvent(new Event('scroll'))` — 合成事件直接觸發 `window.onscroll`，scrollY 恆 0 永遠喺閾值內 → **每次調用 guaranteed +1 頁**，唔使郁 page、冇節流問題。配 `settings.loadsImagesAutomatically=false`（渲染 WebView 永不載圖，圖由 OkHttp 另落）解放主線程。已寫入 `WebViewRenderer.renderChapter`（`__mcStep` 循環）。實測：224 頁 20 秒、206 頁 19 秒攞齊。
+
+#### 13. 預載器「pending 空 = 完成」係 false-complete 陷阱
+* **【問題/限制】**：站點逐頁滴 URL 期間，未落盤嘅頁連 DB 記錄都冇 → `pendingImages()` 都係空。被動輪詢用「pending 空」做完成條件 → render 仲緊就誤報 `rendering=false` → 閱讀器 `chapterComplete` 誤判 → 睇完頭幾頁即俾尾卡掟去下一章（實測 89 頁瞬間變返 3 頁）。
+* **【解決/避坑方案】**：完成與否**只認**：① 持有者標 `chapters.status=done/error`、② `done ≥ expected_pages`。`rendering=false` 只准喺「成話真・齊頁」一刻 emit；補唔齊（限速/斷網）如實帶 error 上報，閱讀器尾卡顯示逃生門提示「備齊晒成話先至通去下一章」，嚴禁扮完成。見 `ChapterPreloader`（2026-11-17 重寫）。
+
+#### 14. CopyManga 章節 flow 序＝最新排最前 —「下一章」會倒退
+* **【問題/限制】**：詳情頁 `.upLoop` 清單原序（flow）係新章喺最前（倒序），用佢做閱讀接續會「下一章」跳返舊卷（實測第17卷→第16卷）。
+* **【解決/避坑方案】**：閱讀器载入 chapters 時，若 ≥90% 標題含數字就用數字序（`db.allChapters(slug, "title")`，內部 `titleNumber` 排序），否則退回 flow（保障「第X話」無數字嘅書）。附錄/番外標題自動插返正確位置。
+
+#### 15. 8 吋 pad（1880×3008）ADB 自動化坐標心得
+* **【問題/限制】**：uiautomator bounds 直接可用（屏幕就係 1880×3008，唔使换算）；但滑杆拖曳好易撳唔中：thumb 跟住當前頁郁（唔係固定 x），起手必須用dump 到嘅 thumb bounds 中心；y 撳太高會落入 pager 變翻頁。
+* **【解決/避坑方案】**：tap 翻頁＝屏幕右側（rtl 書）`input tap 1600 1400`；工具欄副標題/頁碼藥丸可用 `uiautomator dump` + `tr '<'` 分段 grep `text=` 驗證；底部滑杆 thumb 行 **y≈2943**（y=2870 會跌入 pager）；nav 欄 y≈2895；每次測試換唔同卷/話避免 cache 干擾判斷。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*

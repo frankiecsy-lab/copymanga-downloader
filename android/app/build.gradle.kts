@@ -13,8 +13,8 @@ android {
         applicationId = "com.mangacopy.app"
         minSdk = 26          // Android 8.0 — WebView 現代 API + 靜態 WEBP 原生支援
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {
