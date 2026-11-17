@@ -5,6 +5,8 @@ package com.mangacopy.app.data
  * 所有數值同桌面版一致，確保站點行為（WAF、lazy-load、限速）嘅應對策略完全相同。
  */
 object AppConfig {
+    /** App 版本 — title bar「KIECOMIC vX.Y.Z」顯示用；改版本時同 build.gradle.kts 一起改。 */
+    const val VERSION_NAME = "0.3.2"
     const val BASE_URL = "https://www.mangacopy.com"
 
     /**

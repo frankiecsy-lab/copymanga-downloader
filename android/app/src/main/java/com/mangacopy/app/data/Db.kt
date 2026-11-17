@@ -15,7 +15,8 @@ import java.time.format.DateTimeFormatter
  * 表結構同桌面版一致（comics / chapters / images / kv），方便日後匯入桌面 DB。
  */
 class Db private constructor(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "mangacopy.db", null, 4) {
+    // v5：comics.pinned（書架置頂）— 新版本號先會觸發 onUpgrade → createSchema 嘅冪等 ALTER
+    SQLiteOpenHelper(context.applicationContext, "mangacopy.db", null, 5) {
 
     companion object {
         @Volatile private var instance: Db? = null
@@ -23,6 +24,11 @@ class Db private constructor(context: Context) :
             instance ?: synchronized(this) {
                 instance ?: Db(context).also {
                     it.writableDatabase // 觸發 onCreate
+                    // 【教訓】onUpgrade 只在 version 號變動先跑 — 同一 version 內新加嘅
+                    // 冪等 ALTER（例如 v5 加完 pinned 再加 paused）對已裝機用戶永遠唔會執行
+                    // → 「no such column」開機即崩（2026-11-17 連踩兩次 pinned/paused）。
+                    // 正解：冪等遷移每次開 DB 都跑一次（ALTER duplicate → runCatching 吞）。
+                    it.ensureColumns(it.writableDatabase)
                     instance = it
                 }
             }
@@ -100,9 +106,20 @@ class Db private constructor(context: Context) :
         db.execSQL("CREATE TABLE IF NOT EXISTS history (path_word TEXT PRIMARY KEY, viewed_at TEXT)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_chapters_status ON chapters(comic_path_word, status)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_images_status ON images(chapter_id, status)")
-        // v4：隊列次序 + 站點原始章節序（流式）。舊庫 ALTER；已存在會報 duplicate column → 吞咗（冪等）
+        // v4：隊列次序 + 站點原始章節序（流式）
+        ensureColumns(db)
+    }
+
+    /**
+     * 冪等加欄 — 每次開 DB 都跑（見 init() 教訓）：已存在報 duplicate column → 吞咗。
+     * 日後新加欄一律加喺呢度。
+     */
+    private fun ensureColumns(db: SQLiteDatabase) {
         runCatching { db.execSQL("ALTER TABLE comics ADD COLUMN queue_order INTEGER DEFAULT 0") }
         runCatching { db.execSQL("ALTER TABLE chapters ADD COLUMN sort_index INTEGER DEFAULT 0") }
+        // v5：取消下載 paused ＋ 書架置頂 pinned（用戶要求）
+        runCatching { db.execSQL("ALTER TABLE comics ADD COLUMN paused INTEGER DEFAULT 0") }
+        runCatching { db.execSQL("ALTER TABLE comics ADD COLUMN pinned INTEGER DEFAULT 0") }
     }
 
     // ------------------------------------------------------------------ kv/meta
@@ -150,6 +167,7 @@ class Db private constructor(context: Context) :
     data class Comic(
         val pathWord: String, val name: String?, val author: String?, val coverUrl: String?,
         val synopsis: String?, val serialStatus: String?, val status: String?, val favorite: Boolean,
+        val pinned: Boolean = false,
     ) {
         val displayName: String get() = name?.takeIf { it.isNotBlank() } ?: pathWord
         val firstAuthor: String get() = (author ?: "").split(",", "，").firstOrNull()?.trim() ?: ""
@@ -159,13 +177,13 @@ class Db private constructor(context: Context) :
         readableDatabase.rawQuery("SELECT * FROM comics WHERE path_word=?", arrayOf(pathWord))
             .use { if (it.moveToFirst()) comicFrom(it) else null }
 
-    /** 書架列表：收藏優先排序同桌面版（updated_at DESC）。 */
+    /** 書架列表：收藏優先排序同桌面版（updated_at DESC）；置頂（pinned）排最前。 */
     fun listComics(search: String = "", favoriteOnly: Boolean = false): List<Comic> {
         val q = "%${search}%"
         val sql = StringBuilder("SELECT * FROM comics WHERE (name LIKE ? OR author LIKE ?)")
         val args = mutableListOf(q, q)
         if (favoriteOnly) sql.append(" AND favorite=1")
-        sql.append(" ORDER BY updated_at DESC")
+        sql.append(" ORDER BY pinned DESC, updated_at DESC")
         return readableDatabase.rawQuery(sql.toString(), args.toTypedArray())
             .use { c -> generateSequence { if (c.moveToNext()) comicFrom(c) else null }.toList() }
     }
@@ -179,6 +197,25 @@ class Db private constructor(context: Context) :
         writableDatabase.execSQL(
             "UPDATE comics SET favorite=? WHERE path_word=?",
             arrayOf(if (fav) 1 else 0, pathWord)
+        )
+    }
+
+    /** 書架置頂開關 — 唔碰 updated_at（否则置頂本身會觸發重新排序）。 */
+    fun setPinned(pathWord: String, pin: Boolean) {
+        writableDatabase.execSQL(
+            "UPDATE comics SET pinned=? WHERE path_word=?",
+            arrayOf(if (pin) 1 else 0, pathWord)
+        )
+    }
+
+    /**
+     * 取消下載（2026-11-17 用戶：「取消未下載的不要移出書架」）— paused=1 即移出下載佇列，
+     * 書架／章節紀錄全保留；任何明確嘅 DownloadEngine.start(slugs) 會自動解除。
+     */
+    fun setPaused(pathWord: String, paused: Boolean) {
+        writableDatabase.execSQL(
+            "UPDATE comics SET paused=? WHERE path_word=?",
+            arrayOf(if (paused) 1 else 0, pathWord)
         )
     }
 
@@ -201,6 +238,8 @@ class Db private constructor(context: Context) :
         serialStatus = c.getString(c.getColumnIndexOrThrow("serial_status")),
         status = c.getString(c.getColumnIndexOrThrow("status")),
         favorite = c.getInt(c.getColumnIndexOrThrow("favorite")) == 1,
+        pinned = c.getColumnIndex("pinned").takeIf { it >= 0 }
+            ?.let { c.getInt(it) == 1 } ?: false,   // 舊庫未 ALTER 時容錯
     )
 
     // ------------------------------------------------------------------ chapters
@@ -231,6 +270,13 @@ class Db private constructor(context: Context) :
     fun addChapters(pathWord: String, chapters: List<Triple<String, String, String>>): Int {
         val db = writableDatabase
         val ordered = inReadingOrder(chapters)
+        // 「新章」標記只喺**已有清單**嘅情況下成立（首次建清單 = 全書入庫，唔算新章）。
+        // 新插入嘅 cid 累積落 kv「newch:$slug」→ 書架「+N 新章」徽章只計呢啲 cid 仲未
+        // 下載（pending）嘅數量（用戶：「要喺更新書單前及後有差別先顯示；新章睇咗就唔好再提示」）
+        val hadChapters = db.rawQuery(
+            "SELECT 1 FROM chapters WHERE comic_path_word=? LIMIT 1", arrayOf(pathWord)
+        ).use { it.moveToFirst() }
+        val newCids = mutableListOf<String>()
         db.beginTransaction()
         try {
             for ((i, t) in ordered.withIndex()) {
@@ -246,6 +292,7 @@ class Db private constructor(context: Context) :
                             "VALUES(?,?,?,?,'pending',?,?)",
                         arrayOf(pathWord, cid, title, url, i, now())
                     )
+                    newCids += cid
                 } else {
                     val newStatus = if (old == "error") "pending" else old
                     db.execSQL(
@@ -259,7 +306,31 @@ class Db private constructor(context: Context) :
             // 以「卷」為真實章節單位 — 202 頁巨章就係「第17卷」，刪除會誤殺清單，唔做）
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        if (hadChapters && newCids.isNotEmpty()) markNewChapters(pathWord, newCids)
         return chapters.size
+    }
+
+    /** 累積記低本轮 diff 出嚟嘅新章 cid（kv「newch:$slug」，逗號分隔）。 */
+    private fun markNewChapters(pathWord: String, cids: List<String>) {
+        val cur = getMeta("newch:$pathWord")?.split(',')?.filter { it.isNotBlank() }
+            ?.toMutableSet() ?: mutableSetOf()
+        cur += cids
+        setMeta("newch:$pathWord", cur.joinToString(","))
+    }
+
+    /**
+     * 書架「+N 新章」徽章計數 — 只計「上輪更新書單 diff 標記嘅新章」之中仍 pending
+     * （未下載）嘅數量：新章下載／睇完 → 自動消失；由頭到尾都冇 diff → 永遠 0。
+     */
+    fun newChapterPending(pathWord: String): Int {
+        val ids = getMeta("newch:$pathWord")?.split(',')?.filter { it.isNotBlank() }?.toSet()
+            ?: return 0
+        if (ids.isEmpty()) return 0
+        val pending = readableDatabase.rawQuery(
+            "SELECT chapter_id FROM chapters WHERE comic_path_word=? AND status='pending'",
+            arrayOf(pathWord)
+        ).use { c -> generateSequence { if (c.moveToNext()) c.getString(0) else null }.toSet() }
+        return ids.intersect(pending).size
     }
 
     data class Chapter(
@@ -329,14 +400,13 @@ class Db private constructor(context: Context) :
     }
 
     /**
-     * 下載佇列：書架（favorite=1）內有 pending/error 章節嘅漫畫 —
-     * 「移出書架」即等於取消下載（ chapters 保留，返書架即刻返佇列）。
+     * 下載佇列：書架（favorite=1）內有 pending/error 章節、且未「取消下載」（paused=0）嘅漫畫。
      *次序 = queue_order（下載 tab ↑↓ 調序）→ updated_at。
      */
     fun comicsNeedingWork(): List<String> = readableDatabase.rawQuery(
         "SELECT DISTINCT ch.comic_path_word FROM chapters ch " +
             "JOIN comics c ON c.path_word = ch.comic_path_word " +
-            "WHERE ch.status IN ('pending','error') AND c.favorite=1 " +
+            "WHERE ch.status IN ('pending','error') AND c.favorite=1 AND IFNULL(c.paused,0)=0 " +
             "ORDER BY c.queue_order ASC, c.updated_at DESC", null
     ).use { c -> generateSequence { if (c.moveToNext()) c.getString(0) else null }.toList() }
 
@@ -382,6 +452,14 @@ class Db private constructor(context: Context) :
         )
     }
 
+    /** 章節 URL 域名自癒持久化（舊域名被劫持/死咗 → 渲染成功時寫返活域名 URL）。 */
+    fun setChapterUrl(pathWord: String, cid: String, url: String) {
+        writableDatabase.execSQL(
+            "UPDATE chapters SET url=?, updated_at=? WHERE comic_path_word=? AND chapter_id=?",
+            arrayOf(url, now(), pathWord, cid)
+        )
+    }
+
     /** 將列表寫返落 queue_order（0..n-1）— 下載隊列拖-order 持久化。 */
     fun requeue(slugs: List<String>) {
         val db = writableDatabase
@@ -423,6 +501,8 @@ class Db private constructor(context: Context) :
             "UPDATE chapters SET status='pending', image_count=0, expected_pages=0, updated_at=? WHERE comic_path_word=?",
             arrayOf(now(), pathWord)
         )
+        // 全部變返 pending → 清「新章」標記，避免舊 diff 全書誤點徽章
+        setMeta("newch:$pathWord", "")
     }
 
     private fun query(sql: String, args: Array<String>): List<Chapter> =

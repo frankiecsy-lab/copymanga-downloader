@@ -202,13 +202,37 @@ object CopyMangaSource : MangaSource {
         throw lastErr
     }
 
+    /**
+     * 章節 URL 域名自癒（2026-11-17 實測）：DB chapters.url 存嘅係擷取當日嘅域名，
+     * 而站域名日變＋ASUS 路由器 DNS 劫持係間歇性（知識庫 #11）— 舊章（如原作版159）
+     * 存咗死域名就永遠「站點維護」。路徑（/comic/x/chapter/uuid）先係真正身份，
+     * 域名照 currentBase() 探測結果換走即可。
+     */
+    fun rebaseChapterUrl(url: String, base: String): String = runCatching {
+        val u = java.net.URI(url)
+        val b = java.net.URI(base)
+        // 必須両邊都有 host（「not-a-url」呢類相對字串 u.host=null → 唔好亂砌）
+        if (u.host != null && u.host != b.host && u.path.isNotEmpty()) base + u.path else url
+    }.getOrDefault(url)
+
+    /** 渲染章節；舊域名自動 rebasing，中途域名死咗再 invalidate 重新探測重嚟一次。 */
     override suspend fun chapterImageUrls(
         url: String,
         onPartial: (List<String>, Int?) -> Unit,
     ): ChapterPages {
-        val p = WebViewRenderer.renderChapter(url, onPartial)
-        if (p.urls.isEmpty())
-            throw IOException("章節渲染為空（站點可能維護中）— 稍後重試")
-        return p
+        var lastErr: Exception = IOException("章節渲染失敗")
+        repeat(2) { attempt ->
+            val fixed = try { rebaseChapterUrl(url, currentBase()) } catch (e: Exception) { url }
+            try {
+                val p = WebViewRenderer.renderChapter(fixed, onPartial)
+                if (p.urls.isNotEmpty()) return p
+                lastErr = IOException("章節渲染為空（站點可能維護中）— 稍後重試")
+            } catch (e: Exception) { lastErr = e }
+            if (attempt == 0) {   // 可能啱啱先被劫持/域名死 → 作廢緩存，第二次換域名再嚟
+                invalidateBase()
+                delay(1_500)
+            }
+        }
+        throw lastErr
     }
 }

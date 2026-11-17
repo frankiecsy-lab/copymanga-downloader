@@ -3,7 +3,7 @@ package com.mangacopy.app.download
 import android.util.Log
 import com.mangacopy.app.data.Db
 import com.mangacopy.app.data.Storage
-import com.mangacopy.app.source.WebViewRenderer
+import com.mangacopy.app.source.CopyMangaSource
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -130,6 +130,17 @@ object ChapterPreloader {
                         // 新版：drainer 與 render **並行** — onPartial 一有 URL 入 DB，
                         // drainer 即刻 4 lane 開落；第 1 頁由 URL 到手到好盤 <1 秒，
                         // 閱讀器（占位制）即刻見真圖。render 完 drainer 自己啃晒尾數先收工。
+                        // 域名自癒持久化：ch.url 存嘅係舊域名（站域名日變/路由器 DNS
+                        // 劫持，知識庫 #11）→ 渲染前照探測結果 rebase 並寫返 DB，
+                        // 下次（包括 DownloadEngine 隊列）直接用活域名
+                        runCatching {
+                            val fixed = CopyMangaSource.rebaseChapterUrl(
+                                ch.url, CopyMangaSource.currentBase())
+                            if (fixed != ch.url) {
+                                db.setChapterUrl(slug, cid, fixed)
+                                Log.i("MCPRE", "URL 域名自癒 → $fixed")
+                            }
+                        }
                         val renderDone = java.util.concurrent.atomic.AtomicBoolean(false)
                         val rendered = kotlinx.coroutines.coroutineScope {
                             val drainer = launch {
@@ -150,7 +161,8 @@ object ChapterPreloader {
                             }
                             val r = withTimeoutOrNull(150_000L) {
                                 runCatching {
-                                    WebViewRenderer.renderChapter(ch.url) { urls, total ->
+                                    // 經源層入口：內置 rebase＋死域重探一次（第 2 次換域名）
+                                    CopyMangaSource.chapterImageUrls(ch.url) { urls, total ->
                                         // onPartial 喺 IO 協程被同步回調：DB 寫入快、trySend 非阻塞
                                         try {
                                             db.addImages(slug, cid, urls)

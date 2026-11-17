@@ -82,6 +82,23 @@ class CoreLogicTest {
         assertEquals("a_b_c_d_e_f_g_h_i_j", clean)
     }
 
+    @Test
+    fun `章節URL域名自癒 - 死域名換活域名保留路徑`() {
+        // 站域名日變 + 路由器 DNS 劫持（AGENTS.md 知識庫 #11）：DB 舊章 URL 照 probe 結果 rebase
+        val dead = "https://www.mangacopy.com/comic/yiquanchaoren/chapter/efbce9a3-3c7e-11f1-9278-fa163e02432f"
+        val base = "https://www.copymanga.fun"
+        assertEquals(
+            "$base/comic/yiquanchaoren/chapter/efbce9a3-3c7e-11f1-9278-fa163e02432f",
+            com.mangacopy.app.source.CopyMangaSource.rebaseChapterUrl(dead, base),
+        )
+        // 同域名 → 原樣返回（唔好郁已正常嘅 URL）
+        assertEquals(base + "/comic/x/chapter/1",
+            com.mangacopy.app.source.CopyMangaSource.rebaseChapterUrl(base + "/comic/x/chapter/1", base))
+        // 垃圾輸入 → 原樣返回唔炸
+        assertEquals("not-a-url",
+            com.mangacopy.app.source.CopyMangaSource.rebaseChapterUrl("not-a-url", base))
+    }
+
     private fun escapeAttr(s: String) =
         s.replace("&", "&amp;").replace("\"", "&quot;")
 }

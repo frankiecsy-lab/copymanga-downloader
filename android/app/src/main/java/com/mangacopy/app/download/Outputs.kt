@@ -12,15 +12,11 @@ import java.util.zip.ZipOutputStream
 
 /**
  * 產物生成 — 1:1 移植 cm/outputs.py：
- *   CBZ  ：每章頁面打 zip → <漫畫dir>/<名>_<第一位作者>_vol_NN.cbz（冪等：缺/舊先重建）
  *   WEBP ：非 webp 頁面就地上轉 webp（桌面用 Pillow，Android 用 BitmapFactory.compress）
- * 兩個開關存喺 kv（output_cbz / output_webp），切換後對已下載章節重新 ensure 即可，唔使重落。
+ *   CBZ  ：打 zip 打包（2026-11-17 用戶：「刪除 CBZ 嘅選擇，默認全部 WEBP」—
+ *          ensureOutputs 已唔再自動打包；函數保留俾日後需要／清理舊檔用）
  */
 object Outputs {
-
-    /** 默認 WebP only（用戶指定）；CBZ 要喺設置手動開。 */
-    fun outputFlags(db: Db): Pair<Boolean, Boolean> =
-        (db.getMeta("output_cbz", "0") != "0") to (db.getMeta("output_webp", "1") != "0")
 
     /** <名>_<第一位作者>_vol_NN.cbz — NN = 章節按 title 排序嘅 1-based 位置（同桌面版）。 */
     fun cbzFilename(db: Db, slug: String, cid: String): String {
@@ -97,18 +93,11 @@ object Outputs {
         return cbz to true
     }
 
-    /** 對齊桌面 ensure_outputs：將所選輸出格式套用到已完成章節（冪等）。 */
+    /** 輸出 = 全部 WebP（用戶 2026-11-17 指定，CBZ 開關已刪除）：已完成章節就地轉 webp（冪等）。 */
     fun ensureOutputs(db: Db, slug: String, cid: String, comicDir: File): List<String> {
-        val (cbzOn, webpOn) = outputFlags(db)
         val msgs = mutableListOf<String>()
-        if (webpOn) {
-            val n = ensureWebp(db, slug, cid)
-            if (n > 0) msgs += "  ⇄ $n 頁已轉為 WebP"
-        }
-        if (cbzOn) {
-            val (p, rebuilt) = ensureCbz(db, slug, cid, comicDir)
-            if (p != null && rebuilt) msgs += "  📦 CBZ：${p.name}"
-        }
+        val n = ensureWebp(db, slug, cid)
+        if (n > 0) msgs += "  ⇄ $n 頁已轉為 WebP"
         return msgs
     }
 

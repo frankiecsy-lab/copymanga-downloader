@@ -67,6 +67,8 @@ object DownloadEngine {
         if (job?.isActive == true) return
         val list = slugs ?: db.comicsNeedingWork()
         if (list.isEmpty()) return
+        // 明確指定漫畫嘅啟動 = 用戶親手「繼續/重新下載」→ 自動解除「取消下載」（paused）
+        if (slugs != null) slugs.forEach { db.setPaused(it, false) }
         stopRequested = false
         _state.update {
             it.copy(
