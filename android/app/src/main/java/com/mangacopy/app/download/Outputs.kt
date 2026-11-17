@@ -2,6 +2,7 @@ package com.mangacopy.app.download
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
 import com.mangacopy.app.data.Db
 import com.mangacopy.app.data.Storage
 import java.io.File
@@ -17,12 +18,9 @@ import java.util.zip.ZipOutputStream
  */
 object Outputs {
 
-    fun outputFlags(db: Db): Pair<Boolean, Boolean> {
-        val cbz = db.getMeta("output_cbz")
-        val webp = db.getMeta("output_webp")
-        if (cbz == null && webp == null) return true to true   // 默認兩個都開
-        return (cbz != "0") to (webp != "0")
-    }
+    /** 默認 WebP only（用戶指定）；CBZ 要喺設置手動開。 */
+    fun outputFlags(db: Db): Pair<Boolean, Boolean> =
+        (db.getMeta("output_cbz", "0") != "0") to (db.getMeta("output_webp", "1") != "0")
 
     /** <名>_<第一位作者>_vol_NN.cbz — NN = 章節按 title 排序嘅 1-based 位置（同桌面版）。 */
     fun cbzFilename(db: Db, slug: String, cid: String): String {
@@ -45,7 +43,10 @@ object Outputs {
         return try {
             val bmp = BitmapFactory.decodeFile(path) ?: return null
             val newPath = path.substringBeforeLast('.') + ".webp"
-            FileOutputStream(newPath).use { bmp.compress(Bitmap.CompressFormat.WEBP_LOSSY, 85, it) }
+            // WEBP_LOSSY 要 API 30；minSdk 26 嘅舊機 fallback 舊 WEBP enum（30 開頭 mark deprecated，功能不變）
+            val fmt = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY
+                      else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP
+            FileOutputStream(newPath).use { bmp.compress(fmt, 85, it) }
             bmp.recycle()
             File(path).delete()
             newPath
@@ -114,5 +115,16 @@ object Outputs {
     /** 刪除漫畫喺磁碟上嘅所有檔案（漫畫目錄整個刪）。 */
     fun deleteComicFiles(db: Db, slug: String) {
         Storage.existingComicDir(db.firstImagePath(slug))?.deleteRecursively()
+    }
+
+    /** 只刪除 CBZ 壓縮檔（圖片保留）—「CBZ 選擇刪除」。 */
+    fun deleteCbzFiles(db: Db, slug: String): Int {
+        val dir = Storage.existingComicDir(db.firstImagePath(slug)) ?: return 0
+        var n = 0
+        dir.walkTopDown().filter { it.isFile && it.extension.equals("cbz", true) }.forEach {
+            if (it.delete()) n++
+        }
+        if (n > 0) db.clearCbzPaths(slug)
+        return n
     }
 }

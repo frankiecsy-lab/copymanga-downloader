@@ -7,6 +7,18 @@ package com.mangacopy.app.data
 object AppConfig {
     const val BASE_URL = "https://www.mangacopy.com"
 
+    /**
+     * 域名候選（failover 順序）— 站點家族域名多個，但邊個通視乎地區網絡：
+     * 2026-11-17 實測中國大陸網絡 mangacopy.com 連唔上（DNS 污染），copymanga.site 正常。
+     * 運行時由 CopyMangaSource.resolveBase() 逐個探測，揀第一個返回有效列表頁嘅。
+     */
+    val DOMAIN_CANDIDATES = listOf(
+        "https://www.copymanga.site",
+        "https://www.mangacopy.com",
+        "https://www.copymanga.fun",
+        "https://www.copymanga.io",
+    )
+
     // 同桌面版共用同一個瀏覽器 UA：站點 WAF 認呢個 UA（Playwright 都係用佢）
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"

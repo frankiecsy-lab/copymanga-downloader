@@ -15,7 +15,7 @@ import java.time.format.DateTimeFormatter
  * 表結構同桌面版一致（comics / chapters / images / kv），方便日後匯入桌面 DB。
  */
 class Db private constructor(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "mangacopy.db", null, 1) {
+    SQLiteOpenHelper(context.applicationContext, "mangacopy.db", null, 4) {
 
     companion object {
         @Volatile private var instance: Db? = null
@@ -37,11 +37,19 @@ class Db private constructor(context: Context) :
     }
 
     override fun onOpen(db: SQLiteDatabase) {
-        db.execSQL("PRAGMA journal_mode=WAL")
-        db.execSQL("PRAGMA synchronous=NORMAL")
+        // journal_mode setter 會回傳一行結果 → execSQL 會炸（SQLITE_OK + "queries ... rawQuery only"），必須 rawQuery
+        db.rawQuery("PRAGMA journal_mode=WAL", null).use { it.moveToFirst() }
+        db.execSQL("PRAGMA synchronous=NORMAL")     // setter 無回傳行，execSQL 安全
     }
 
-    override fun onCreate(db: SQLiteDatabase) {
+    override fun onCreate(db: SQLiteDatabase) = createSchema(db)
+
+    // v1 有 bug：多语句 execSQL 得咗第一句（net 只有 comics 表）→ v2 用逐句建表；
+    // 全部 IF NOT EXISTS，舊庫 upgrade 即自愈
+    override fun onUpgrade(db: SQLiteDatabase, oldV: Int, newV: Int) = createSchema(db)
+
+    /** 【重要】Android execSQL 一次只執行一句 — 多语句字串會靜默只行第一句，必須逐句分開。 */
+    private fun createSchema(db: SQLiteDatabase) {
         db.execSQL(
             """
             CREATE TABLE IF NOT EXISTS comics (
@@ -56,7 +64,10 @@ class Db private constructor(context: Context) :
                 favorite    INTEGER DEFAULT 0,
                 last_seen   TEXT,
                 updated_at  TEXT
-            );
+            )""".trimIndent()
+        )
+        db.execSQL(
+            """
             CREATE TABLE IF NOT EXISTS chapters (
                 comic_path_word TEXT,
                 chapter_id      TEXT,
@@ -68,7 +79,10 @@ class Db private constructor(context: Context) :
                 cbz_path        TEXT,
                 updated_at      TEXT,
                 PRIMARY KEY (comic_path_word, chapter_id)
-            );
+            )""".trimIndent()
+        )
+        db.execSQL(
+            """
             CREATE TABLE IF NOT EXISTS images (
                 comic_path_word TEXT,
                 chapter_id      TEXT,
@@ -80,15 +94,16 @@ class Db private constructor(context: Context) :
                 status          TEXT DEFAULT 'pending',
                 updated_at      TEXT,
                 PRIMARY KEY (comic_path_word, chapter_id, page_index)
-            );
-            CREATE INDEX IF NOT EXISTS idx_chapters_status ON chapters(comic_path_word, status);
-            CREATE INDEX IF NOT EXISTS idx_images_status   ON images(chapter_id, status);
-            CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
-            """.trimIndent()
+            )""".trimIndent()
         )
+        db.execSQL("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS history (path_word TEXT PRIMARY KEY, viewed_at TEXT)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_chapters_status ON chapters(comic_path_word, status)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_images_status ON images(chapter_id, status)")
+        // v4：隊列次序 + 站點原始章節序（流式）。舊庫 ALTER；已存在會報 duplicate column → 吞咗（冪等）
+        runCatching { db.execSQL("ALTER TABLE comics ADD COLUMN queue_order INTEGER DEFAULT 0") }
+        runCatching { db.execSQL("ALTER TABLE chapters ADD COLUMN sort_index INTEGER DEFAULT 0") }
     }
-
-    override fun onUpgrade(db: SQLiteDatabase, oldV: Int, newV: Int) { /* 首版無遷移 */ }
 
     // ------------------------------------------------------------------ kv/meta
     fun setMeta(key: String, value: String) {
@@ -189,12 +204,16 @@ class Db private constructor(context: Context) :
     )
 
     // ------------------------------------------------------------------ chapters
-    /** 冪等 upsert（同桌面版 add_chapters 一致）：error 章節重設為 pending 以便重試。 */
+    /**
+     * 冪等 upsert（同桌面版 add_chapters 一致）：error 章節重設為 pending 以便重試。
+     * sort_index = 传入清單嘅位置（站點詳情頁原始序 = 「流式」顯示序）。
+     */
     fun addChapters(pathWord: String, chapters: List<Triple<String, String, String>>): Int {
         val db = writableDatabase
         db.beginTransaction()
         try {
-            for ((cid, title, url) in chapters) {
+            for ((i, t) in chapters.withIndex()) {
+                val (cid, title, url) = t
                 val cur = db.rawQuery(
                     "SELECT status FROM chapters WHERE comic_path_word=? AND chapter_id=?",
                     arrayOf(pathWord, cid)
@@ -202,16 +221,16 @@ class Db private constructor(context: Context) :
                 val old = cur.use { if (it.moveToFirst()) it.getString(0) else null }
                 if (old == null) {
                     db.execSQL(
-                        "INSERT INTO chapters(comic_path_word,chapter_id,title,url,status,updated_at) " +
-                            "VALUES(?,?,?,?,'pending',?)",
-                        arrayOf(pathWord, cid, title, url, now())
+                        "INSERT INTO chapters(comic_path_word,chapter_id,title,url,status,sort_index,updated_at) " +
+                            "VALUES(?,?,?,?,'pending',?,?)",
+                        arrayOf(pathWord, cid, title, url, i, now())
                     )
                 } else {
                     val newStatus = if (old == "error") "pending" else old
                     db.execSQL(
-                        "UPDATE chapters SET title=?, url=?, status=?, updated_at=? " +
+                        "UPDATE chapters SET title=?, url=?, status=?, sort_index=?, updated_at=? " +
                             "WHERE comic_path_word=? AND chapter_id=?",
-                        arrayOf(title, url, newStatus, now(), pathWord, cid)
+                        arrayOf(title, url, newStatus, i, now(), pathWord, cid)
                     )
                 }
             }
@@ -225,10 +244,21 @@ class Db private constructor(context: Context) :
         val status: String, val imageCount: Int, val expectedPages: Int, val cbzPath: String?,
     )
 
-    /** 順序 = ORDER BY title（同桌面版；CBZ vol 序號都係呢個位置）。 */
-    fun allChapters(pathWord: String): List<Chapter> = query(
-        "SELECT * FROM chapters WHERE comic_path_word=? ORDER BY title", arrayOf(pathWord)
-    )
+    /**
+     * 章節清單。order：
+     *   title（默認，同桌面版；**CBZ vol 序號永遠用呢個位置**，唔受 UI 排序影響）
+     *   flow   = 站點詳情頁原始序（sort_index，用戶預設嘅「流式」）
+     *   title_desc / pending_first（未下載／出錯排前面）
+     */
+    fun allChapters(pathWord: String, order: String = "title"): List<Chapter> {
+        val ord = when (order) {
+            "flow" -> "sort_index ASC, title ASC"
+            "title_desc" -> "title DESC"
+            "pending_first" -> "(status='done') ASC, sort_index ASC, title ASC"
+            else -> "title ASC"
+        }
+        return query("SELECT * FROM chapters WHERE comic_path_word=? ORDER BY $ord", arrayOf(pathWord))
+    }
 
     fun pendingChapters(pathWord: String): List<Chapter> = query(
         "SELECT * FROM chapters WHERE comic_path_word=? AND status='pending' ORDER BY title",
@@ -251,6 +281,51 @@ class Db private constructor(context: Context) :
         )
     }
 
+    /** 只重設指定章節（error→pending），done 唔動 — 供「tap 單章下載／批次揀下載」。 */
+    fun resetChaptersToPending(pathWord: String, cids: Set<String>) {
+        val db = writableDatabase
+        for (cid in cids) {
+            db.execSQL(
+                "UPDATE chapters SET status='pending', updated_at=? " +
+                    "WHERE comic_path_word=? AND chapter_id=? AND status='error'",
+                arrayOf(now(), pathWord, cid)
+            )
+        }
+    }
+
+    /**
+     * 下載佇列：書架（favorite=1）內有 pending/error 章節嘅漫畫 —
+     * 「移出書架」即等於取消下載（ chapters 保留，返書架即刻返佇列）。
+     *次序 = queue_order（下載 tab ↑↓ 調序）→ updated_at。
+     */
+    fun comicsNeedingWork(): List<String> = readableDatabase.rawQuery(
+        "SELECT DISTINCT ch.comic_path_word FROM chapters ch " +
+            "JOIN comics c ON c.path_word = ch.comic_path_word " +
+            "WHERE ch.status IN ('pending','error') AND c.favorite=1 " +
+            "ORDER BY c.queue_order ASC, c.updated_at DESC", null
+    ).use { c -> generateSequence { if (c.moveToNext()) c.getString(0) else null }.toList() }
+
+    // ------------------------------------------------------------------ history
+    /** 瀏覽紀錄：入詳情頁就記（重訪更新時間），列表 JOIN comics 攞名稱/封面/簡介/作者。 */
+    fun recordHistory(pathWord: String) {
+        writableDatabase.execSQL(
+            "INSERT INTO history(path_word, viewed_at) VALUES(?,?) " +
+                "ON CONFLICT(path_word) DO UPDATE SET viewed_at=excluded.viewed_at",
+            arrayOf(pathWord, now())
+        )
+    }
+
+    fun historyEntries(limit: Int = 100): List<Comic> = readableDatabase.rawQuery(
+        "SELECT c.* FROM history h JOIN comics c ON c.path_word = h.path_word " +
+            "ORDER BY h.viewed_at DESC LIMIT $limit", null
+    ).use { c -> generateSequence { if (c.moveToNext()) comicFrom(c) else null }.toList() }
+
+    fun removeHistory(pathWord: String) {
+        writableDatabase.execSQL("DELETE FROM history WHERE path_word=?", arrayOf(pathWord))
+    }
+
+    fun clearHistory() { writableDatabase.execSQL("DELETE FROM history") }
+
     fun setChapterStatus(pathWord: String, cid: String, status: String, imageCount: Int = 0) {
         writableDatabase.execSQL(
             "UPDATE chapters SET status=?, image_count=?, updated_at=? WHERE comic_path_word=? AND chapter_id=?",
@@ -271,6 +346,39 @@ class Db private constructor(context: Context) :
             arrayOf(cbzPath, now(), pathWord, cid)
         )
     }
+
+    /** 將列表寫返落 queue_order（0..n-1）— 下載隊列拖-order 持久化。 */
+    fun requeue(slugs: List<String>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            slugs.forEachIndexed { i, s ->
+                db.execSQL("UPDATE comics SET queue_order=? WHERE path_word=?", arrayOf(i, s))
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    /** 有 done 章節嘅漫畫（已下載 tab）。 */
+    fun doneComics(): List<Comic> = readableDatabase.rawQuery(
+        "SELECT c.* FROM comics c WHERE EXISTS (SELECT 1 FROM chapters ch " +
+            "WHERE ch.comic_path_word=c.path_word AND ch.status='done') " +
+            "ORDER BY c.updated_at DESC", null
+    ).use { c -> generateSequence { if (c.moveToNext()) comicFrom(c) else null }.toList() }
+
+    /** 清除 CBZ 路徑記錄（檔被刪後）。 */
+    fun clearCbzPaths(pathWord: String) {
+        writableDatabase.execSQL(
+            "UPDATE chapters SET cbz_path=NULL WHERE comic_path_word=?", arrayOf(pathWord)
+        )
+    }
+
+    /** 閱讀進度（每章記住睇到第幾頁）— kv 持久化。 */
+    fun saveReadPos(pathWord: String, cid: String, page: Int) =
+        setMeta("readpos:$pathWord:$cid", page.toString())
+
+    fun readPos(pathWord: String, cid: String): Int =
+        getMeta("readpos:$pathWord:$cid")?.toIntOrNull() ?: 0
 
     /** 重置一個漫畫嘅下載狀態（保留檔案與資料夾，強制完整重落）。 */
     fun resetComicDownloads(pathWord: String) {

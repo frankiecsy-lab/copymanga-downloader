@@ -28,6 +28,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -35,6 +36,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import coil.compose.AsyncImage
 import com.mangacopy.app.data.Db
+import com.mangacopy.app.download.ChapterPreloader
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -42,14 +44,19 @@ import java.io.File
  * 閱讀器 — 黑底沉浸式，支持用家要求嘅全部模式：
  *   翻頁（單頁 / 雙頁）｜流水（垂直連讀）
  *   閱讀方向：漫畫式 右→左（RTL）／ 一般 左→右
- * 頁面來源 = DB done 頁面檔案（NNN.webp）；章節可前後跳。
+ *
+ * 即時閱讀（用戶要求「無感瀏覽」）：開卷即行 ChapterPreloader —
+ *   渲染一有新頁 URL 就逐張落 webp，前 N 張（設置可改，默認 5）到齊即刻開讀，
+ *   其餘背景補落；進度記憶（每章 readPos），退出重入自動返上次位置。
+ * 跨章節無縫（用戶要求）：本章備齊前 N 頁即背景預載下一章（preflow 防重）；
+ *   翻到本章尾 → 自動接下一章（readPos 恢復位置）；第一頁 ← 可无缝回上一章。
  * 全屏隱系統欄 + 可選保持螢幕開啟；點擊左右 1/3 翻頁、中間出工具欄。
  */
 @Composable
 fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
     val db = remember { Db.get() }
     val comic = remember(slug) { db.getComic(slug) }
-    val chapters = remember(slug) { db.allChapters(slug) }
+    val chapters = remember(slug) { db.allChapters(slug, "flow") }
 
     var currentCid by remember { mutableStateOf(cid) }
     val chapterIndex = chapters.indexOfFirst { it.chapterId == currentCid }.coerceAtLeast(0)
@@ -61,11 +68,32 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
     var showBar by remember { mutableStateOf(true) }
     var showSheet by remember { mutableStateOf(false) }
 
-    val pages = remember(currentCid) {
+    // --- 即時預載：preflow 每次 emit 都 bump imgTick → pages 重查 DB 見新頁 ---
+    var prog by remember { mutableStateOf(ChapterPreloader.Prog(true, 0, 0)) }
+    var imgTick by remember { mutableStateOf(0) }
+    LaunchedEffect(currentCid) {
+        prog = ChapterPreloader.Prog(true, 0, 0)
+        imgTick++
+        ChapterPreloader.preflow(slug, currentCid).collect { p -> prog = p; imgTick++ }
+    }
+
+    val pages = remember(currentCid, imgTick) {
         db.allImages(slug, currentCid)
             .filter { it.status == "done" && it.path != null }
             .map { File(it.path!!) }
     }
+    val firstN = remember { ChapterPreloader.firstN() }
+    val totalPages = maxOf(prog.total, pages.size)
+
+    // --- 跨章節無縫（用戶要求：無縫無感睇到完、能跨章節）---
+    val nextCid = chapters.getOrNull(chapterIndex + 1)?.chapterId
+    val prevCid = chapters.getOrNull(chapterIndex - 1)?.chapterId
+    var nextProg by remember { mutableStateOf(ChapterPreloader.Prog(true, 0, 0)) }
+    var nextStartedFor by remember { mutableStateOf("") }
+    // 切章進行中 → 屏蔽尾卡自動接續（防止 pager 舊 page index clamp 誤觸發跳章）
+    val switching = remember { mutableStateOf(false) }
+    val chapterComplete = pages.isNotEmpty() && !prog.rendering
+    val nextReady = nextProg.done >= firstN || (!nextProg.rendering && nextProg.done > 0)
 
     val view = LocalView.current
     val window = (view.context as? Activity)?.window
@@ -96,30 +124,129 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
         else pages.chunked(2)
     }
 
-    val pagerState = rememberPagerState(pageCount = { units.size })
+    val tailCard = nextCid != null && pages.isNotEmpty()
+    val displayCount = units.size + if (tailCard) 1 else 0
+    // pageCount lambda 要讀「最新」值 → rememberUpdatedState 防 lambda 擷住舊 units
+    val unitsCount by rememberUpdatedState(units.size)
+    val tailCount by rememberUpdatedState(if (tailCard) 1 else 0)
+    val pagerState = rememberPagerState(pageCount = { unitsCount + tailCount })
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    // 章節切換 → 翻返第一頁
-    LaunchedEffect(currentCid) {
-        if (mode == "paged") pagerState.animateScrollToPage(0) else listState.animateScrollToItem(0)
+    // --- 進度記憶：入章恢復 readPos；閱讀中 300ms debounce 持續保存 ---
+    // mode 入 key：翻頁↔流水切換都要重新行恢復邏輯 → 落返當前進度（唔會彈返第 1 頁）
+    val pendingRestore = remember(currentCid, mode) { db.readPos(slug, currentCid) }
+    var restoreDone by remember(currentCid, mode) { mutableStateOf(pendingRestore <= 0) }
+    LaunchedEffect(currentCid, mode) {
         showBar = true
+        if (pendingRestore <= 0) {
+            // 先定位（壓住 clamp flash-frame），先至解除 switching 屏蔽
+            if (mode == "paged") pagerState.scrollToPage(0) else listState.scrollToItem(0)
+            restoreDone = true
+            switching.value = false
+        }
+    }
+    LaunchedEffect(pages.size, currentCid, prog.rendering, mode) {
+        // 等 readPos 嗰頁真係備好先跳（即時預載初期頁數仲少）
+        if (!restoreDone && pages.isNotEmpty()) {
+            if (pages.size > pendingRestore) {
+                val pageIdx = if (useSpread) pendingRestore / 2 else pendingRestore
+                if (mode == "paged")
+                    pagerState.scrollToPage(pageIdx.coerceIn(0, (units.size - 1).coerceAtLeast(0)))
+                else
+                    listState.scrollToItem(pendingRestore.coerceIn(0, (pages.size - 1).coerceAtLeast(0)))
+                restoreDone = true
+            } else if (!prog.rendering) {
+                // readPos 超出呢章實際頁數（站點削頁/清單有變）→ 停落最尾一页
+                if (mode == "paged")
+                    pagerState.scrollToPage((units.size - 1).coerceAtLeast(0))
+                else
+                    listState.scrollToItem((pages.size - 1).coerceAtLeast(0))
+                restoreDone = true
+            }
+        }
+        // 只有恢復真正完成（企穩喺目標頁）先解除屏蔽；等頁期間保持 true 擋住誤觸發
+        if (restoreDone) switching.value = false
     }
 
+    // --- 後台預載下一章：本章首 N 頁到手（或已齊頁）即悄悄預備（無感跨章）---
+    LaunchedEffect(currentCid) {
+        nextProg = ChapterPreloader.Prog(true, 0, 0)
+        nextStartedFor = ""
+    }
+    LaunchedEffect(currentCid, pages.size, prog.rendering) {
+        val nc = nextCid ?: return@LaunchedEffect
+        if (nextStartedFor == nc) return@LaunchedEffect          // 呢章已經開咗預載
+        if (!(pages.size >= firstN || (!prog.rendering && pages.isNotEmpty())))
+            return@LaunchedEffect
+        nextStartedFor = nc
+        scope.launch {
+            ChapterPreloader.preflow(slug, nc).collect { p ->
+                // nc 仲係「下一章」先更新進度；切章後舊收集器自動靜默、繼續背景落圖
+                val cur = chapters.indexOfFirst { it.chapterId == currentCid }
+                if (chapters.getOrNull(cur + 1)?.chapterId == nc) nextProg = p
+            }
+        }
+    }
+    val curPos = rememberUpdatedState(
+        if (mode == "paged") pagerState.currentPage * (if (useSpread) 2 else 1)
+        else listState.firstVisibleItemIndex
+    )
+    LaunchedEffect(currentCid) {
+        androidx.compose.runtime.snapshotFlow { curPos.value }
+            .collect {
+                kotlinx.coroutines.delay(300)
+                // 切章進行中唔好存：pager 跨章瞬間會 clamp 去舊 index（flash-frame），
+                // 誤存會污染新章 readPos → 開章即尾頁 → 自動接連跳（實測踩過）
+                if (!switching.value) db.saveReadPos(slug, currentCid, curPos.value)
+            }
+    }
+
+    // 切章統一入口：先存走而家嗰章嘅 readPos（跨章回來時無縫恢復位置）
+    val gotoChapter: (String) -> Unit = { id ->
+        runCatching { db.saveReadPos(slug, currentCid, curPos.value) }
+        switching.value = true
+        currentCid = id
+    }
     val goNext: () -> Unit = {
         if (mode == "paged") {
-            if (pagerState.currentPage < units.size - 1)
+            if (pagerState.currentPage < displayCount - 1)
                 scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1) }
         } else {
-            scope.launch { listState.animateScrollToItem((listState.firstVisibleItemIndex + 1).coerceAtMost(pages.size - 1)) }
+            if (pages.isNotEmpty() && listState.firstVisibleItemIndex < pages.size - 1)
+                scope.launch { listState.animateScrollToItem(listState.firstVisibleItemIndex + 1) }
+            else if (nextCid != null) gotoChapter(nextCid!!)   // 流水模式撳右下 = 直接去下一章
         }
     }
     val goPrev: () -> Unit = {
         if (mode == "paged") {
             if (pagerState.currentPage > 0)
                 scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1) }
+            else if (prevCid != null) gotoChapter(prevCid!!)   // 第一頁← = 無縫回上一章（readPos 落返尾頁）
         } else {
-            scope.launch { listState.animateScrollToItem((listState.firstVisibleItemIndex - 1).coerceAtLeast(0)) }
+            if (listState.firstVisibleItemIndex > 0)
+                scope.launch { listState.animateScrollToItem(listState.firstVisibleItemIndex - 1) }
+            else if (prevCid != null) gotoChapter(prevCid!!)
+        }
+    }
+
+    // 自動接下一章（翻頁）：停落尾卡 + 本章齊頁 + 下一章備好 → 無縫切過去
+    LaunchedEffect(pagerState.settledPage, mode, units.size, chapterComplete,
+        nextProg.done, nextProg.error, switching.value) {
+        if (mode == "paged" && !switching.value && tailCard && chapterComplete &&
+            pagerState.settledPage == units.size && (nextReady || nextProg.error != null)
+        ) gotoChapter(nextCid!!)
+    }
+    // 自動接下一章（流水）：footer 可見 + 本章齊頁 + 下一章備好
+    LaunchedEffect(mode, currentCid, pages.size, chapterComplete,
+        nextProg.done, nextProg.error, switching.value) {
+        if (mode != "scroll" || switching.value || !chapterComplete || nextCid == null)
+            return@LaunchedEffect
+        androidx.compose.runtime.snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        }.collect { idx ->
+            if (idx >= pages.size && (nextReady || nextProg.error != null))
+                gotoChapter(nextCid!!)
         }
     }
 
@@ -127,12 +254,30 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (pages.isEmpty()) {
+            // 即時預載中（或載入失敗）— 展示實時進度而非死頁
             Column(
                 Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("呢章未下載／未有完成頁面", color = Color.White)
-                Spacer(Modifier.height(8.dp))
+                if (prog.error != null) {
+                    Text(prog.error ?: "載入失敗", color = Color.White,
+                        style = MaterialTheme.typography.bodyLarge)
+                } else {
+                    Text("即時載入中…", color = Color.White,
+                        style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(12.dp))
+                    if (totalPages > 0) {
+                        LinearProgressIndicator(
+                            progress = { prog.done.toFloat() / totalPages },
+                            color = Color.White, trackColor = Color.DarkGray,
+                            modifier = Modifier.width(220.dp),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text("已備 ${prog.done}/$totalPages 頁（備齊 $firstN 頁即開讀）",
+                            color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                    } else CircularProgressIndicator(color = Color.White)
+                }
+                Spacer(Modifier.height(16.dp))
                 TextButton(onClick = onBack) { Text("返回", color = Color.White) }
             }
         } else if (mode == "scroll") {
@@ -158,6 +303,28 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                item {
+                    if (nextCid != null) NextChapterCard(
+                        title = chapters.getOrNull(chapterIndex + 1)?.title,
+                        complete = chapterComplete,
+                        done = if (chapterComplete) nextProg.done else prog.done,
+                        total = if (chapterComplete) nextProg.total else totalPages,
+                        error = if (chapterComplete) nextProg.error else prog.error,
+                        fillHeight = false,
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable { gotoChapter(nextCid!!) },
+                    )
+                    else if (!chapterComplete)
+                        Text("本章背景加載緊 ${prog.done}/$totalPages 頁…",
+                            color = Color.LightGray, style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            textAlign = TextAlign.Center)
+                    else
+                        Text("—— 最後一章 · 全書完 ——",
+                            color = Color.LightGray, style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            textAlign = TextAlign.Center)
+                }
             }
         } else {
             // 翻頁（單頁/雙頁），RTL = reverseLayout
@@ -167,7 +334,23 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(),
             ) { page ->
-                val unit = units[page]
+                val unit = units.getOrNull(page)
+                if (unit == null) {
+                    // 合成尾卡：下一章入口（背景預載進度實時顯示）
+                    Box(Modifier.fillMaxSize().background(Color.Black)) {
+                        NextChapterCard(
+                            title = chapters.getOrNull(chapterIndex + 1)?.title,
+                            complete = chapterComplete,
+                            done = if (chapterComplete) nextProg.done else prog.done,
+                            total = if (chapterComplete) nextProg.total else totalPages,
+                            error = if (chapterComplete) nextProg.error else prog.error,
+                            fillHeight = true,
+                            modifier = Modifier.fillMaxSize()
+                                .clickable { if (nextCid != null) gotoChapter(nextCid!!) },
+                        )
+                    }
+                    return@HorizontalPager
+                }
                 Row(
                     Modifier.fillMaxSize()
                         .pointerInput(rtl) {
@@ -204,10 +387,14 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp),
             ) {
                 Text(
-                    "${pagerState.currentPage + 1} / ${units.size}",
+                    if (pagerState.currentPage < units.size)
+                        "${pagerState.currentPage + 1} / ${units.size}"
+                    else "下一章 · ${chapters.getOrNull(chapterIndex + 1)?.title ?: ""}",
                     color = Color.White,
                     style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        .widthIn(max = 260.dp),
                 )
             }
         }
@@ -230,21 +417,28 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                chapters.getOrNull(chapterIndex)?.title ?: "",
+                                buildString {
+                                    append(chapters.getOrNull(chapterIndex)?.title ?: "")
+                                    if (prog.rendering && prog.done < totalPages)
+                                        append("　·　即時載入 ${prog.done}/$totalPages 頁")
+                                    if (nextCid != null)
+                                        append("　·　下一章已備 ${nextProg.done}/" +
+                                            "${maxOf(nextProg.total, nextProg.done)}")
+                                },
                                 color = Color.LightGray, style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                         }
                         IconButton(
                             enabled = chapterIndex > 0,
-                            onClick = { currentCid = chapters[chapterIndex - 1].chapterId },
+                            onClick = { if (chapterIndex > 0) gotoChapter(chapters[chapterIndex - 1].chapterId) },
                         ) {
                             Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "上一章",
                                 tint = if (chapterIndex > 0) Color.White else Color.Gray)
                         }
                         IconButton(
                             enabled = chapterIndex < chapters.size - 1,
-                            onClick = { currentCid = chapters[chapterIndex + 1].chapterId },
+                            onClick = { if (chapterIndex < chapters.size - 1) gotoChapter(chapters[chapterIndex + 1].chapterId) },
                         ) {
                             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "下一章",
                                 tint = if (chapterIndex < chapters.size - 1) Color.White else Color.Gray)
@@ -306,6 +500,64 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                 }
                 Spacer(Modifier.height(16.dp))
             }
+        }
+    }
+}
+
+/**
+ * 跨章節尾卡（翻頁合成頁 / 流水 footer）：實時顯示下一章背景預載進度，
+ * 備齊即自動接上；本章未齊頁時顯示本章補頁狀態並提示。
+ */
+@Composable
+private fun NextChapterCard(
+    title: String?, complete: Boolean, done: Int, total: Int,
+    error: String?, fillHeight: Boolean, modifier: Modifier = Modifier,
+) {
+    val box = if (fillHeight) modifier.fillMaxSize()
+              else modifier.fillMaxWidth().height(170.dp)
+    Column(
+        box.padding(20.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (!complete) {
+            CircularProgressIndicator(
+                color = Color.White, modifier = Modifier.size(26.dp), strokeWidth = 2.dp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Text("本章背景加載中…", color = Color.LightGray,
+                style = MaterialTheme.typography.bodySmall)
+            if (total > 0) Text("已備 $done/$total 頁",
+                color = Color.Gray, style = MaterialTheme.typography.labelSmall)
+        } else {
+            Text("下 一 章", color = Color.Gray, style = MaterialTheme.typography.labelMedium)
+            Spacer(Modifier.height(6.dp))
+            Text(title ?: "下一話", color = Color.White,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(10.dp))
+            when {
+                error != null -> Text("$error\n撳一下照去，入面會重試",
+                    color = Color(0xFFFF8A80), style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center)
+                total > 0 && done < total -> {
+                    LinearProgressIndicator(
+                        progress = { done.toFloat() / total },
+                        color = Color.White, trackColor = Color.DarkGray,
+                        modifier = Modifier.width(180.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text("下一章後台備緊 $done/$total 頁 · 備齊自動接上",
+                        color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                }
+                done > 0 -> Text("下一章已備 $done 頁 · 撳一下即刻繼續",
+                    color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                else -> Text("下一章準備緊…", color = Color.Gray,
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(Modifier.height(14.dp))
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null,
+                tint = Color.White, modifier = Modifier.size(34.dp))
         }
     }
 }

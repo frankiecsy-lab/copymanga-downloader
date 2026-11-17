@@ -1,5 +1,37 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-17 — 新功能：MangaCopy Android APK v0.2.0（無縫跨章節閱讀 ＋ Wave #2 體驗升級）
+
+### ⚡ 核心：無縫無感下載睇漫畫、跨章節（開發者要求）
+- **即時閱讀**：`ChapterPreloader.preflow` — renderChapter `onPartial` 有新頁 URL 即刻入 DB 即刻落 webp，首 N 頁（可設，默認 5）到手即刻開讀，其餘背景補落
+- **後台預載下一章**：本章首 N 頁一到手即悄悄 preflow 下一章，副標題實時顯示「下一章已備 x/y」；
+  in-flight 防重（ConcurrentHashMap key=slug:cid，重複 preflow 自動變被動輪詢），收尾必 emit `rendering=false` 最終態
+- **翻盡自動接章**：翻頁模式本章尾卡（下一章卡＋進度條，備齊自動接上／撳一下即刻繼續）；流水模式 LazyColumn footer 卡；
+  最後一章無尾卡／footer 顯示「最後一章 · 全書完」，實測唔會誤跳
+- **跨章前後導航**：工具欄 ‹ › 章節箭頭；翻頁邊界 goPrev/goNext 自動跨章；跨章 goPrev 落返上一章**尾頁**
+- **進度記憶**：每章 readPos（kv `readpos:<slug>:<cid>`）300ms debounce 持續保存；重入/跨章恢復原頁、
+  越界 fallback 尾頁；翻頁↔流水切換都落返當前進度（mode 入 LaunchedEffect key）；
+  switching 屏蔽旗防止跨章瞬間 pager clamp flash-frame 污染 readPos（連環誤跳根因）
+- **閱讀器全屏沉浸**：App.kt 喺 reader 路由唔套 Scaffold（隱底欄/側欄）
+
+### Wave #2（開發者 15 項要求）
+- CBZ 存檔後可選刪除、輸出默認全 WebP；開 App 自動背景更新書架清單（ListUpdater）＋新章節徽章；設置頁手動更新全部清單＋進度
+- 下載 tab 分「未下載/已下載」、批量取消/刪除、隊列調序（`comics.queue_order`）；修「一直卡下載中」（渲染超時/連續失敗熔斷）；一行式隊列行（bar＋序號）
+- 章節 FlowRow 排序 chips（流式/正序/倒序/未下載優先）；封面名水平置中；點章節=即時閱讀、點下載=批量模式
+- 主菜單「發現」改「搜尋」（模糊書名/作者）＋種類 filter；所有列表默認 GRID 可切 LIST；歷史記錄（HistoryScreen）
+- **DB v4**：`comics.queue_order`、`chapters.sort_index`（PRAGMA user_version=4）
+
+### 實機 E2E 驗證（Redmi 25079RPDCC ＋ 本地假站 1:1 仿真實 DOM）
+站點詳情頁全线維護中（見知識庫），改用 `adb reverse` ＋ PC 假站（`.comicContent-list li img[data-src]`＋「x / N」badge）
+跑**真實代碼路徑**（WebViewRenderer 渲染/逐頁下載/跨章預載全真實執行）：
+第1話→第2話→第3話自動無縫接章、後台預載「下一章已備 12/12」、防重被動分支、書尾翻頁/流水均無誤跳、
+跨章返回落上一章尾頁、readPos 全對、切模式保進度 — 全部通過（logcat MCPRE/MCWEB ＋ DB readpos 雙重佐證）。
+
+### 測試與構建
+`gradle testDebugUnitTest assembleDebug lintDebug` **BUILD SUCCESSFUL**（test 6/6、lint 0 error）；
+`app-debug.apk` 17.99MB（versionName 0.2.0）。新增 `app/src/debug/AndroidManifest.xml`
+（debug 容許 cleartext HTTP 供本機 E2E，release 不受影響）。
+
 ## 2026-11-17 — 新功能：MangaCopy Android APK v0.1.0（手機/平板下載＋離線閱讀）
 
 ### 功能說明

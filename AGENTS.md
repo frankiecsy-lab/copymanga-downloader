@@ -97,4 +97,27 @@
 * **【問題/限制】**：2026-11-17 開發 Android 期間，`DownloadEngine.kt` 寫入時工具回報「File created successfully」，但 session 重啟後個檔案唔喺盤上，之後 UI 引用全部 Unresolved reference。
 * **【解決/避坑方案】**：**跨 session 恢復後，凡要繼續編輯一個模組，先 `ls` 核對檔案清單再講**；編譯（`gradle compileDebugKotlin` / `python -m py_compile`）係最後防線，唔好單信 write 成功訊息。
 
+#### 8. callbackFlow 內 `launch{}` 預設 inherit collect 者嘅 Dispatcher → 堵死主線程
+* **【問題/限制】**：Android Compose `LaunchedEffect` 用 Main dispatcher collect Flow；`callbackFlow { launch { OkHttp同步下載 } }` 嘅 `launch` 冇指定 dispatcher 就會跟住 collect 者行喺主線程 — 網絡 I/O 直接卡死 UI（冇 ANR 表象、冇異常，極難歸因）。2026-11-17 ChapterPreloader 踩過：preflow 零下載、App 假死。
+* **【解決/避坑方案】**：callbackFlow 內凡做阻塞 I/O 一律 `launch(Dispatchers.IO)`；同理适用于 `flow { }` builder（collect 喺邊就喺邊行）。
+
+#### 9. Pager 跨章瞬間 clamp 去舊 index（flash-frame）會污染 readPos → 連環誤跳
+* **【問題/限制】**：切章（currentCid 改變）瞬間 `HorizontalPager` 嘅 currentPage 未 reset，會短暫停留喺上一章嘅 index（例如尾卡 index=12）；若 debounce 保存協程恰好呢一刻寫入，新章 readPos 被污染成「尾頁」→ 開場就係尾卡 → 觸發自動接下一章 → 連環跳章。同理 LazyColumn scrollToItem 未企穩前 layoutInfo 都係舊值。
+* **【解決/避坑方案】**：ReaderScreen 用 `switching` 屏蔽旗：`gotoChapter` 設 true → 恢復 effect 完成 `scrollToPage`/`scrollToItem` 定位後（`restoreDone`）先清；保存協程 `if (!switching.value)` 先寫 DB。恢复定位必須喺「頁數足夠」之後先跳（`pages.size > pendingRestore`），越界 fallback 尾頁。
+
+#### 10. Android 無後端嘅本地假站 E2E 方法論（站點維護時驗證抓取/下載/閱讀全鏈路）
+* **【問題/限制】**：CopyManga 詳情頁全线維護時，無法用真實站做章節渲染/跨章 E2E；mockk 又覆蓋唔到 WebViewRenderer 真實 JS 路徑。
+* **【解決/避坑方案】**（已驗證方法論，工具全部系統自帶）：
+  1. PC Python 生成假站 HTML（**1:1 仿真實站 DOM**：`.comicContent-list li img[data-src]` + 「N / M」badge + 純 Python 生成色調 PNG 逐章逐頁不同色方便截圖鑑章）+ `python -m http.server 8080 --bind 127.0.0.1`
+  2. `adb reverse tcp:8080 tcp:8080` → 手機 App 直接訪 `http://127.0.0.1:8080`
+  3. cleartext HTTP：`app/src/debug/AndroidManifest.xml` 加 `usesCleartextTraffic=true` ＋ **`tools:replace`**（manifest merger 強制，冇就 build 失敗）；只影響 debug variant
+  4. DB seed：PC 起 `sqlite3` 建 v4 schema seed → `adb exec-out run-as com.mangacopy.app` 側 `cp`（**cp 前必須 rm `mangacopy.db*` 連 `-journal/-wal/-shm`**，否則舊 WAL 覆蓋新 data）
+  5. 驗證 pull DB：`run-as cat databases/mangacopy.db` + **`cat ...db-wal`** 落同目錄開（app 用 WAL mode，最新寫入未 checkpoint 只喺 -wal 入面，淨 pull 主檔會睇到舊態）
+  6. 章節 url 欄直接寫假站 URL 入 seed → WebViewRenderer/renderChapter/逐頁下載/跨章預載全部行**真實代碼路徑**
+* **【注意】**：Git Bash 會 mangle `/data/...` 路徑 → adb shell 指令一律加 `MSYS_NO_PATHCONV=1`；background http server 有時間上限會自動俾 kill，長 test 要設大 `timeout`。
+
+#### 11. CopyManga 站點域現狀（2026-11-17 實測）
+* **【問題/限制】**：詳情頁全线維護 — `.fun` 404「服務器搬遷維護中」、`.site` 5.6KB WAF redirect shell、`.io` 連唔上、`.mangacopy.com` 404 + ASUS 路由器 DNS 劫持（cert CN=blocking.asus.hns.tm）。**唯 searchcl 搜尋 API 只喺 `https://www.copymanga.fun` 存活**（JSON code 200）。
+* **【解決/避坑方案】**：App 維持多域名 fallback 策略；搜尋功能用 `.fun` searchcl；詳情/章節 E2E 用本地假站方法論（見第 10 條）替代，站點復原後再跑真實站回归。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*

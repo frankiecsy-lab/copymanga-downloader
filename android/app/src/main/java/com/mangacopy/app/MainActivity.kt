@@ -4,11 +4,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
-import androidx.compose.ui.graphics.Color
 import com.mangacopy.app.ui.App
+import com.mangacopy.app.ui.MangaCopyTheme
+import com.mangacopy.app.ui.UiTheme
 
 /**
  * MangaCopy Android 入口 — 書架 / 發現 / 下載 / 設置 四頁 + 詳情 + 閱讀器。
@@ -19,7 +17,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MaterialTheme {
+            UiTheme.load(com.mangacopy.app.data.Db.get())   // 冷啟動由 kv 讀返主題
+            MangaCopyTheme {
                 App()
             }
         }

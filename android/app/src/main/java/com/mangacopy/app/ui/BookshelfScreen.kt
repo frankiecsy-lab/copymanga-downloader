@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,9 +25,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import androidx.compose.ui.text.style.TextAlign
 import com.mangacopy.app.data.Db
 import com.mangacopy.app.download.DownloadEngine
+import com.mangacopy.app.download.ListUpdater
 import com.mangacopy.app.download.Outputs
+import kotlinx.coroutines.launch
 
 /**
  * 書架 — 收藏管理（favorite=1 先入書架）+ 封面圖 + 下載進度徽章。
@@ -41,7 +45,9 @@ fun BookshelfScreen(nav: NavHostController) {
     var confirmRemove by remember { mutableStateOf<Db.Comic?>(null) }
     var confirmDelete by remember { mutableStateOf<Db.Comic?>(null) }
     val engineState by DownloadEngine.state.collectAsState()
+    val listState by ListUpdater.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     // 由詳情頁/reader 返回時自動重新載入
     LifecycleResumeEffect(Unit) {
@@ -57,19 +63,39 @@ fun BookshelfScreen(nav: NavHostController) {
                     Text("書架", style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
+                    IconButton(onClick = { nav.navigate("history") }) {
+                        Icon(Icons.Filled.History, "瀏覽紀錄",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     TextButton(
-                        enabled = !engineState.running && comics.isNotEmpty(),
-                        onClick = {
-                            DownloadEngine.start(db.favoritePathWords(), checkUpdates = true)
-                            nav.navigate("downloads") { launchSingleTop = true }
-                        },
-                    ) { Text("全部更新書單") }
+                        enabled = !listState.running && comics.isNotEmpty(),
+                        onClick = { ListUpdater.start(db.favoritePathWords()) },
+                    ) { Text(if (listState.running) "更新中…" else "全部更新書單") }
                 }
                 Text(
-                    "收藏 ${comics.size} 部" + if (engineState.running) "　·　下載中：${engineState.comicName}" else "",
+                    when {
+                        listState.running ->
+                            "清單更新中 ${listState.done}/${listState.total}　·　${listState.current}" +
+                                if (listState.newChapters > 0) "　·　新增 ${listState.newChapters} 章" else ""
+                        engineState.running -> {
+                            val act = engineState.queue.firstOrNull { it.active }
+                            "下載中：${act?.name ?: "排緊隊"}"
+                        }
+                        listState.lastFinishAt > 0 && listState.newChapters > 0 ->
+                            "收藏 ${comics.size} 部　·　最近檢查新增 ${listState.newChapters} 章（睇「+新章」徽章）"
+                        else -> "收藏 ${comics.size} 部"
+                    },
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (listState.running) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                 )
+                if (listState.running) {
+                    LinearProgressIndicator(
+                        progress = { if (listState.total > 0) listState.done.toFloat() / listState.total else 0f },
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    )
+                }
             }
         },
     ) { pad ->
@@ -80,10 +106,10 @@ fun BookshelfScreen(nav: NavHostController) {
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text("書架係空空嘅", style = MaterialTheme.typography.titleMedium)
-                Text("去「發現」撳漫畫加入書架啦", style = MaterialTheme.typography.bodyMedium,
+                Text("去「搜尋」撳漫畫加入書架啦", style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = { nav.navigate("browse") }) { Text("去發現") }
+                Button(onClick = { nav.navigate("browse") }) { Text("去搜尋") }
             }
         } else {
             LazyVerticalGrid(
@@ -114,13 +140,17 @@ fun BookshelfScreen(nav: NavHostController) {
                     MenuRow("📖 打開 / 查看章節") { menuFor = null; nav.openDetail(comic.pathWord) }
                     MenuRow("🔄 更新書單（檢查新章節）") {
                         menuFor = null
-                        DownloadEngine.start(listOf(comic.pathWord), checkUpdates = true)
-                        nav.navigate("downloads") { launchSingleTop = true }
+                        ListUpdater.start(listOf(comic.pathWord))
                     }
                     MenuRow("⬇️ 繼續／重新下載") {
                         menuFor = null
                         DownloadEngine.start(listOf(comic.pathWord))
                         nav.navigate("downloads") { launchSingleTop = true }
+                    }
+                    MenuRow("📦 只刪除 CBZ（保留圖片）") {
+                        menuFor = null
+                        val n = Outputs.deleteCbzFiles(db, comic.pathWord)
+                        scope.launch { snackbar.showSnackbar("已刪除 $n 個 CBZ") }
                     }
                     MenuRow("🗑️ 刪除已下載檔案") { menuFor = null; confirmDelete = comic }
                     MenuRow("⭐ 移出書架（唔刪檔）") {
@@ -179,13 +209,29 @@ private fun ShelfCard(
                 modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
             )
+            val pendingNew = prog.chTotal - prog.chDone - prog.chErr
             if (prog.chTotal > 0 && prog.chDone == prog.chTotal) {
                 Icon(
                     Icons.Filled.CheckCircle, "已完成",
                     tint = Color(0xFF2E7D32),
                     modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp),
                 )
-            } else if (prog.chTotal > 0) {
+            } else if (prog.chDone > 0 && pendingNew > 0) {
+                // 清單檢查發現新章節（未下过）→ 明確顯示「+N 新章」（用戶要求）
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiary,
+                    shape = RoundedCornerShape(topStart = 8.dp, bottomEnd = 8.dp),
+                    modifier = Modifier.align(Alignment.TopEnd),
+                ) {
+                    Text(
+                        "+$pendingNew 新章",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onTertiary,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            if (prog.chTotal > 0 && prog.chDone < prog.chTotal) {
                 Surface(
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
                     shape = RoundedCornerShape(bottomEnd = 8.dp),
@@ -205,6 +251,8 @@ private fun ShelfCard(
             comic.displayName,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 2, overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,      // 用戶要求：封面下漫畫名水平置中
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

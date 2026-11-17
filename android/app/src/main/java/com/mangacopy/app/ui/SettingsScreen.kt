@@ -11,7 +11,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.mangacopy.app.data.Db
 import com.mangacopy.app.data.Storage
+import com.mangacopy.app.download.ChapterPreloader
 import com.mangacopy.app.download.DownloadEngine
+import com.mangacopy.app.download.ListUpdater
 import com.mangacopy.app.download.Outputs
 import com.mangacopy.app.source.SourceRegistry
 import kotlinx.coroutines.Dispatchers
@@ -43,7 +45,9 @@ fun SettingsScreen() {
     var rtl by remember { mutableStateOf(ReaderPrefs.rtl(db)) }
     var spread by remember { mutableStateOf(ReaderPrefs.spread(db)) }
     var keepOn by remember { mutableStateOf(ReaderPrefs.keepScreenOn(db)) }
+    var preN by remember { mutableStateOf(ChapterPreloader.firstN()) }
     var usedBytes by remember { mutableStateOf(-1L) }
+    val listState by ListUpdater.state.collectAsState()
 
     LaunchedEffect(Unit) {
         usedBytes = withContext(Dispatchers.IO) {
@@ -76,6 +80,26 @@ fun SettingsScreen() {
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
 
+            SectionTitle("外觀")
+            Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("主題模式")
+                    Text("跟系統深淺色，或者固定淺色/暗黑（即時生效）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                SingleChoiceSegmentedButtonRow {
+                    listOf("system" to "跟系統", "light" to "淺色", "dark" to "暗黑")
+                        .forEachIndexed { i, (v, label) ->
+                            SegmentedButton(
+                                selected = UiTheme.mode.value == v,
+                                onClick = { UiTheme.set(db, v) },
+                                shape = SegmentedButtonDefaults.itemShape(i, 3),
+                            ) { Text(label, maxLines = 1) }
+                        }
+                }
+            }
+
             SectionTitle("輸出格式（影響新完成嘅章節）")
             Row(Modifier.padding(horizontal = 16.dp)) {
                 Column(Modifier.weight(1f)) {
@@ -98,6 +122,71 @@ fun SettingsScreen() {
                 Switch(checked = cbzOn, onCheckedChange = {
                     cbzOn = it; db.setMeta("output_cbz", if (it) "1" else "0")
                 })
+            }
+
+            SectionTitle("清單與預載")
+            Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("手動更新全部漫畫清單")
+                    Text("重新渲染書架所有漫畫嘅章節清單、檢查新章節（唔會自動落圖）；" +
+                            "App 每次開啟 3 秒後都會自動做一次",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Button(
+                    enabled = !listState.running && !DownloadEngine.isRunning &&
+                            db.favoritePathWords().isNotEmpty(),
+                    onClick = { ListUpdater.start(db.favoritePathWords()) },
+                ) { Text(if (listState.running) "更新中" else "更新") }
+            }
+            if (listState.running) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "更新中 ${listState.done}/${listState.total}" +
+                        "　·　當前：${listState.current}　·　新增 ${listState.newChapters} 章",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    maxLines = 1,
+                )
+                LinearProgressIndicator(
+                    progress = { if (listState.total > 0) listState.done.toFloat() / listState.total else 0f },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 4.dp),
+                )
+            } else if (listState.lastFinishAt > 0) {
+                val mins = ((System.currentTimeMillis() - listState.lastFinishAt) / 60_000).toInt()
+                Text(
+                    "上次檢查：%s前完成　·　新增 ${listState.newChapters} 章".format(
+                        if (mins < 1) "剛剛" else if (mins < 60) "$mins 分鐘" else "${mins / 60} 鐘"
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+            listState.lastError?.let {
+                Text("錯誤：$it", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp))
+            }
+            Row(
+                Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("即時閱讀預下載張數")
+                    Text("開卷即刻無感睇：備齊前 N 張 webp 即開讀（其餘背景補落）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                SingleChoiceSegmentedButtonRow {
+                    listOf(3, 5, 10, 15).forEachIndexed { i, n ->
+                        SegmentedButton(
+                            selected = preN == n,
+                            onClick = { preN = n; db.setMeta("prewebp_n", n.toString()) },
+                            shape = SegmentedButtonDefaults.itemShape(i, 4),
+                        ) { Text("$n", maxLines = 1) }
+                    }
+                }
             }
 
             SectionTitle("閱讀默認")
@@ -161,7 +250,7 @@ fun SettingsScreen() {
 
             SectionTitle("關於")
             Text(
-                "MangaCopy Android 0.1.0\n源碼同桌面版一庫：copymanga-downloader",
+                "MangaCopy Android 0.2.0\n源碼同桌面版一庫：copymanga-downloader",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
