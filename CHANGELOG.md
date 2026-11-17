@@ -16,8 +16,18 @@
 - 配合既有：tap 中央顯示 UI → **5 秒無操作自動收返全屏**（流水模式實測
   顯示→6 秒收回全部通過）
 
-### 📏 底部 taskbar 矮化（用戶四輪：「矮一點」→「還是高」→「44dp」→「40dp」）
-- `NavigationBar` 高度預設 80dp → 60dp → 52dp → 44dp → **40dp**（實機核對 icon＋label 完整無切）
+### 📏 底部 taskbar 高度迭代（用戶多輪：「矮一點」→「還是高」→「44dp」→「40dp」→「太低顯示唔全」）
+- `NavigationBar` 高度預設 80dp → 60dp → 52dp → 44dp → 40dp（太低壓爆 item）→ 48dp（仍嫌矮）
+  → 56dp（再高一點點）→ **60dp 定稿**（用戶指定；icon＋label＋揀中膠囊完整）
+
+### 🐛 搜尋頁閃退修復（用戶：「按搜尋就閃退了」）
+- 起因：為修「全部 N 部已載完」頁腳挤咗第一格內 wrap，將 LazyVerticalGrid 頁腳
+  改 span 橫跨全行 — 但 span lambda 嘅參數 `it` 係 **item index**（單元素清單＝0），
+  `GridItemSpan(0)` 拋 `IllegalArgumentException: The span value should be higher than 0`
+  → 搜尋結果不足一屏（頁腳可見被 compose）即 FATAL 閃退
+- 正解：`span = { GridItemSpan(maxLineSpan) }` — `LazyGridItemSpanScope.maxLineSpan`
+  先係行內總格數；呢類 span 參數錯誤屬 runtime 斷言，編譯期過唔到（AGENTS.md 知識庫 #24）
+- 實機回归：搜「gantz」→ 3 結果 →「—— 全部 3 部已載完 ——」全寬置中顯示、程序生還 ✓
 
 - 版本 0.3.3（versionCode 6）；三件套 testDebugUnitTest 7/7、assembleDebug、
   lintDebug 全過；Realme 實機：流水模式入 232 話 → tap 中央出 UI → 5 秒自動收 ✓

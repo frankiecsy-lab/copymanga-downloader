@@ -170,4 +170,9 @@
 * **【問題/限制】**：舊版翻頁用左右 1/3、流水用三段（中間 20%–55% 竟係 goPrev）— 用戶投訴「流水按中間唔通全屏、變咗轉頁」，要行為一致先唔使記兩套。
 * **【解決/避坑方案】**：兩模式統一 `inCenter = x∈(0.2w,0.8w) && y∈(0.2h,0.8h)` → `showBar` 切換；區外翻頁按左右半屏（rtl 換向）、流水按上下半屏。UI 顯示後 5 秒 LaunchedEffect 自動收（showSheet 開緊暫停倒數）。
 
+#### 24. LazyVerticalGrid span lambda 嘅 `it` 係 item index — GridItemSpan(0) 即時閃退
+* **【問題/限制】**：搜尋頁頁腳要橫跨全行，寫咗 `gridItems(listOf(0), span = { GridItemSpan(it) })` — 以為 lambda 參數係「行內總格數」，其實係 **item index**（單元素清單恆 0）→ `IllegalArgumentException: The span value should be higher than 0`（LazyGridSpan.kt 斷言）→ 搜尋結果不足一屏、頁腳可見被 compose 即 FATAL 閃退（用戶：「按搜尋就閃退了」）。編譯/lint 全過，pure runtime-only crash。
+* **【正確資源】**：[Compose LazyGridItemSpanScope 文檔](https://developer.android.com/reference/kotlin/androidx/compose/foundation/lazy/grid/LazyGridItemSpanScope)（span lambda 簽名 `LazyGridItemSpanScope.(index: Int) -> GridItemSpan`，receiver 提供 `maxLineSpan`）。
+* **【解決/避坑方案】**：全行 span 一律 `span = { GridItemSpan(maxLineSpan) }`（scope 內自動係當前行總格數，動態列數都啱）。同理 LazyColumn 用 `LazyItemSpanScope.maxLineSpan`。改 span 類代碼後一定要用「結果不足一屏」嘅搜尋（例如 gantz→3 部）觸發頁腳 compose 先至验到。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*

@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
@@ -233,7 +234,12 @@ fun BrowseScreen(nav: NavHostController) {
                             inShelf = remember(meta, shelfTick) { db.getComic(meta.pathWord)?.favorite == true },
                         )
                     }
-                    gridItems(listOf(0)) {
+                    // 頁腳要 span 橫跨全行 — LazyVerticalGrid 的 item 預設只佔一格，
+                    // 「全部 N 部已載完」會挤咗第一格內 wrap（用戶：「最後一包唔係用全寬」）。
+                    // ⚠️ span lambda 入面個 it 係 item index（單元素＝0）—
+                    //    GridItemSpan(0) 直接 IllegalArgumentException 閃退；
+                    //    要用 LazyGridItemSpanScope.maxLineSpan（範圍內自動係行內總格數）
+                    gridItems(listOf(0), span = { GridItemSpan(maxLineSpan) }) {
                         LoadMoreFooter(loading, total, shown.size, error == null) { loadPage() }
                     }
                 }

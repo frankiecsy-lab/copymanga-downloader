@@ -10,7 +10,9 @@ LOGO 素材 `res/drawable-nodpi/kie_logo.png`）。
 - 🤏 **放大後按兩下返回原大小**（雙擊偵測只認放大狀態下嘅純單擊；拖曳/pinch 清鏈）
 - 🎯 **點擊區統一**：翻頁＋流水都係「中央方型區（上下左右留 20%）＝顯示/收起 UI，
   區外先轉頁」（翻頁按左右半屏 rtl 換向／流水按上下半屏）；UI 顯示 5 秒自動收返全屏
-- 📏 底部 taskbar 矮化：NavigationBar 80dp → **40dp**
+- 📏 底部 taskbar 高度迭代：80dp → 40/48dp 過矮 → 56dp → **60dp 定稿**（用戶指定）
+- 🐛 搜尋頁閃退修復：grid 頁腳 span 誤用 item index（`GridItemSpan(0)` 非法）→
+  改 `GridItemSpan(maxLineSpan)`；「全部 N 部已載完」全寬置中（見知識庫 #24）
 - 版本 0.3.3（versionCode 6）
 
 ## v0.3.2 重點（2026-11-17）
