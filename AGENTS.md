@@ -161,4 +161,13 @@
 * **【問題/限制】**：`enableEdgeToEdge()` 後狀態欄/鑽孔/導航欄透明，露出嘅係 **window background**：硬嚟 `Theme.Material.Light`（白底）時，暗黑模式沉浸式閱讀器頂部會留一條白（Compose 層 background 改唔到佢）；而 Compose 嘅 `isSystemInDarkTheme()` 又管唔到 activity theme 層。
 * **【解決/避坑方案】**：`values/themes.xml`（light：白 windowBackground）＋ `values-night/themes.xml`（黑）双双定義 `Theme.MangaCopy`（bars 透明）；再由 `syncWindow(dark)` SideEffect 跟 UiTheme 三態即時改 `decorView.setBackgroundColor` ＋ `isAppearanceLightStatusBars` — 設置頁轉主題即刻見效，唔使重啟。
 
+#### 22. calculatePan()/positionChange() 會 consume 位置變化 — 放錯位置會搶走 Pager 橫滑
+* **【問題/限制】**：`PointerInputChange.positionChange()`（`calculatePan()` 底層）一調用就自動 `consumePositionChange()`。喺 ZoomablePage 手勢迴圈如果無條件累加位移，scale==1 單指都會被 consume → HorizontalPager 收唔到拖曳 delta（唔翻頁）、父層 `detectTapGestures` 亦見唔到點擊 — 手勢無聲無息失靈，冇異常。
+* **【正確資源】**：[Compose PointerInputScope 文檔](https://developer.android.com/develop/ui/compose/gestures/pointer)（pass/consume 模型：child Main pass 先於 parent，consume 即斷鏈）。
+* **【解決/避坑方案】**：位移/縮放計算一律放入 `if (scale > 1f || multi)` 呢個「反正都要 consume 全部」嘅分支內；scale==1 單指路徑零調用零 consume。雙擊偵測同理：tap 判定（drag≤touchSlop）只喺放大狀態先有意義，所以用分支內累計嘅 drag 就夠。
+
+#### 23. 閱讀器點擊區終版：中央 20%–80% 方型＝顯示 UI，區外先轉頁
+* **【問題/限制】**：舊版翻頁用左右 1/3、流水用三段（中間 20%–55% 竟係 goPrev）— 用戶投訴「流水按中間唔通全屏、變咗轉頁」，要行為一致先唔使記兩套。
+* **【解決/避坑方案】**：兩模式統一 `inCenter = x∈(0.2w,0.8w) && y∈(0.2h,0.8h)` → `showBar` 切換；區外翻頁按左右半屏（rtl 換向）、流水按上下半屏。UI 顯示後 5 秒 LaunchedEffect 自動收（showSheet 開緊暫停倒數）。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*

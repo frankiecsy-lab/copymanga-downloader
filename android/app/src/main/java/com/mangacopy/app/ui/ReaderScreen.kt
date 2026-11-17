@@ -371,11 +371,16 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                 state = listState,
                 modifier = Modifier.fillMaxSize()
                     .pointerInput(Unit) {
+                        // 用戶（2026-11-17）：「流水式按中間唔通全屏、變咗轉頁」＋
+                        // 「所有閱讀模式按中間都唔應該換頁 — 中間＝上下左右留 20% 嘅正中方型」—
+                        // 中央區（x/y 均喺 20%–80%）顯示/收起 UI；區外先轉頁（流水按上/下半屏）
                         detectTapGestures { offset ->
-                            val h = size.height
+                            val w = size.width; val h = size.height
+                            val inCenter = offset.x > w * 0.2f && offset.x < w * 0.8f &&
+                                offset.y > h * 0.2f && offset.y < h * 0.8f
                             when {
-                                offset.y < h * 0.2f -> showBar = !showBar
-                                offset.y < h * 0.55f -> goPrev()
+                                inCenter -> showBar = !showBar
+                                offset.y < h / 2f -> goPrev()
                                 else -> goNext()
                             }
                         }
@@ -463,12 +468,16 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                 Row(
                     Modifier.fillMaxSize()
                         .pointerInput(rtl) {
+                            // 中央方型區（上下左右留 20%，用戶 2026-11-17 定義）→ 顯示/收起 UI；
+                            // 區外按左右半屏轉頁（rtl 換向）。橫跨頂/底帶嘅 tap 都歸左右處理
                             detectTapGestures { offset ->
-                                val w = size.width
+                                val w = size.width; val h = size.height
+                                val inCenter = offset.x > w * 0.2f && offset.x < w * 0.8f &&
+                                    offset.y > h * 0.2f && offset.y < h * 0.8f
                                 when {
-                                    offset.x < w / 3f -> if (rtl) goNext() else goPrev()
-                                    offset.x > w * 2 / 3f -> if (rtl) goPrev() else goNext()
-                                    else -> showBar = !showBar
+                                    inCenter -> showBar = !showBar
+                                    offset.x < w / 2f -> if (rtl) goNext() else goPrev()
+                                    else -> if (rtl) goPrev() else goNext()
                                 }
                             }
                         },
@@ -722,6 +731,7 @@ private fun PrevChapterCard(title: String?, hasPrev: Boolean, modifier: Modifier
  *   • scale==1 且單指：完全唔 consume → Row 嘅點擊翻頁 / Pager 單指橫滑照常；
  *   • 兩指落（multi）：即時 onClaim 宣示主權（外層鎖 pager）＋開始 pinch；
  *   • scale>1：所有觸控 consume＋pan 拖曳（clamp 唔甩邊）→ 縮放中點擊唔會誤翻頁；
+ *   • 放大後「按兩下」（連兩下純單擊）→ 返回原大小（用戶要求）；
  *   • 抬手 scale≈1 自動復位；換頁（isZoomed=false）強制復位。
  * 縮放實現 = graphicsLayer scale/translation（唔重新 layout，1 到 4 倍流暢）。
  */
@@ -735,6 +745,8 @@ private fun ZoomablePage(
 ) {
     var scale by remember { mutableStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+    // 用戶（2026-11-17）：「放大後按兩下返回原大小」— 放大狀態下連續兩下純單擊 = 復位 1×
+    var lastTapMs by remember { mutableLongStateOf(0L) }
     if (!isZoomed && scale != 1f) { scale = 1f; offset = Offset.Zero }   // 換頁強制復位
     LaunchedEffect(scale) { onScale(scale) }
 
@@ -742,15 +754,20 @@ private fun ZoomablePage(
         modifier.pointerInput(Unit) {
             awaitEachGesture {
                 awaitFirstDown(requireUnconsumed = false)
+                var multi = false
+                var drag = 0f
                 do {
                     val event = awaitPointerEvent()
-                    val multi = event.changes.count { it.pressed } >= 2
+                    if (event.changes.count { it.pressed } >= 2) multi = true
+                    // ⚠️ calculatePan/positionChange 會 consume 位置變化 → 只在要 consume 嘅
+                    //    分支內調用；scale==1 單指完全唔碰，先至唔會搶走 Pager 橫滑／父層翻頁點擊
                     if (scale > 1f || multi) {
                         if (multi) onClaim()
                         val newScale = (scale * event.calculateZoom()).coerceIn(1f, 4f)
                         val maxX = (newScale - 1f) * size.width / 2f
                         val maxY = (newScale - 1f) * size.height / 2f
                         val pan = event.calculatePan()
+                        drag += pan.getDistance()                       // 累計位移 → 區分「點擊」定「拖曳」
                         offset = Offset(
                             (offset.x + pan.x).coerceIn(-maxX, maxX),
                             (offset.y + pan.y).coerceIn(-maxY, maxY),
@@ -760,7 +777,23 @@ private fun ZoomablePage(
                         event.changes.forEach { it.consume() }
                     }
                 } while (event.changes.any { it.pressed })
-                if (scale <= 1.02f) { scale = 1f; offset = Offset.Zero }  // 輕放開 = 還原
+
+                // 手勢完結：
+                //  • 放大中(scale>1)嘅「純單擊」（冇多指、位移≤touchSlop）→ 雙擊計時，
+                //    兩下間隔 ≤ doubleTapTimeout 即復位 1×（用戶：「按兩下返回原大小」）；
+                //  • 輕放開（scale≈1）→ 還原；拖曳/pinch → 清雙擊鏈。
+                val singleTap = !multi && drag <= viewConfiguration.touchSlop
+                val now = System.currentTimeMillis()
+                when {
+                    scale > 1f && singleTap ->
+                        if (now - lastTapMs <= viewConfiguration.doubleTapTimeoutMillis) {
+                            scale = 1f; offset = Offset.Zero; lastTapMs = 0L   // 第二下 → 返回原大小
+                        } else {
+                            lastTapMs = now                                     // 第一下 → 記低等第二下
+                        }
+                    scale <= 1.02f -> { scale = 1f; offset = Offset.Zero; lastTapMs = 0L }
+                    else -> lastTapMs = 0L
+                }
             }
         },
         contentAlignment = Alignment.Center,

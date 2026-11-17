@@ -1,5 +1,27 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-17 — 改進：KIECOMIC Android v0.3.3（雙擊還原縮放 ＋ 閱讀點擊中央方型區 ＋ 底欄矮化）
+
+### 🤏 放大後「按兩下」返回原大小
+- `ZoomablePage` 手勢迴圈加雙擊偵測：放大狀態（scale>1）下連續兩下**純單擊**
+  （冇多指、位移≤touchSlop）間隔 ≤ `doubleTapTimeout` 即復位 1×；拖曳/pinch 自動清雙擊鏈。
+  位移累計只在 consume 分支做 — `calculatePan/positionChange` 會 consume 位置變化，
+  scale==1 單指完全唔碰，Pager 橫滑／翻頁點擊零干擾（詳見 AGENTS.md 知識庫 #22）
+
+### 🎯 閱讀點擊區重定義（用戶：「所有閱讀模式按中間都唔應該換頁 —
+### 中間＝上下左右留 20% 嘅正中方型範圍」）
+- 翻頁＋流水兩模式統一：**中央方型區（x/y 均喺 20%–80%）＝ 顯示/收起 UI**；
+  區外先轉頁 — 翻頁按左右半屏（rtl 換向）、流水按上下半屏
+- 根治流水模式舊映射（中間 20%–55% 係 goPrev →「按中間唔通全屏、變咗轉頁」）
+- 配合既有：tap 中央顯示 UI → **5 秒無操作自動收返全屏**（流水模式實測
+  顯示→6 秒收回全部通過）
+
+### 📏 底部 taskbar 矮化（用戶兩輪：「矮一點」→「還是高」）
+- `NavigationBar` 高度預設 80dp → 60dp → **52dp**（icon 24＋label 16＋縫隙剛好企穩）
+
+- 版本 0.3.3（versionCode 6）；三件套 testDebugUnitTest 7/7、assembleDebug、
+  lintDebug 全過；Realme 實機：流水模式入 232 話 → tap 中央出 UI → 5 秒自動收 ✓
+
 ## 2026-11-17 — 新功能：KIECOMIC Android v0.3.2（品牌改名 KIECOMIC ＋ 全頁 icon 化 ＋ 兩指縮放 ＋ 全屏閱讀 ＋ 日夜視窗同步）
 
 ### 🏷 品牌統一「KIECOMIC」（开发者：「app 名稱改 KIECOMIC，呢個亦係整體以後嘅名」）

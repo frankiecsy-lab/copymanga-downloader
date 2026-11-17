@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
@@ -153,7 +154,9 @@ fun App() {
         } else {
             Scaffold(
                 bottomBar = {
-                    NavigationBar {
+                    // 用戶（2026-11-17 兩輪）：「taskbar 矮一點」→「還是高」—
+                    // 預設 80dp → 60dp → 52dp（icon 24＋label 16＋縫隙 4 剛好企穩，再矮會切字）
+                    NavigationBar(Modifier.height(52.dp)) {
                         DESTS.forEach { d ->
                             NavigationBarItem(
                                 selected = currentRoute == d.route,
