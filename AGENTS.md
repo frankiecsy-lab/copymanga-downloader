@@ -145,4 +145,20 @@
 * **【問題/限制】**：跨章瞬間 `pagerState` 係**同一個 remember 實例**，currentPage 未 reset 就係舊章 index（尾卡位）。舊代碼 readPos=0 嘅新章 `restoreDone` 初始 true → 第一幀就清 `switching` 屏蔽旗 → 尾卡 auto-advance／頭卡 auto-prev 喺窗口期連環誤觸發（實測：23卷→24卷→25卷附錄 自動連跳，全程零用戶操作）。另外：入章一刻 `prog.total` 未 emit（量程=temporarily 已備頁數）會將尾頁 readPos clamp 去已備尾頁（readPos=216 降落 200）；預載器補頁循環若 pending 全部冇 url 會全程零 emit → prog 永停 0/0、副標題誤報「成話下載中 0/210」。
 * **【解決/避坑方案】**（`ReaderScreen.kt` + `ChapterPreloader.kt`，已實機回归）：① **一律「定位→企穩→先清旗」**：restoreDone 初始 false，readPos=0 都照樣 scrollToPage 第 1 頁，完成先清 switching，所有 auto 跳章 effect 開頭 `if (switching.value) return`；② 恢復跳頁要等 `totalPages > pendingRestore`，只有 `rendering=false`（量程尘埃落定）先容許將「readPos 超出量程」當站點削頁 clamp 尾；③ 補頁循環每輪結尾（含 pend 空路徑）必 `trySend` 當前 done/total；④ 拖曳/量程類 UI 邏輯一律用 badge 總頁（totalPages）唔好用已備頁數。
 
+#### 18. M3 IconButton 細圓底（≤40dp）會迫爆 icon — 改 Surface＋clickable
+* **【問題/限制】**：Material3 IconButton 有預設 contentPadding 12dp＋最小互動區 48dp：將佢 constrain 去 31dp 圓底時，icon 實際可用區得返 31−24=7dp 被強迫縮到變形；而呢個版本嘅 IconButton **冇 `contentPadding` 參數**（編譯直接報 `No parameter with name 'contentPadding' found`），想手動縮 padding 行唔通。
+* **【解決/避坑方案】**：細圓按鈕直接用 `Surface(CircleShape, modifier=Modifier.size(31.dp).clip(CircleShape).clickable{...}) { Box(fillMaxSize, Center){ Icon(size=18.dp) } }` — 自己管尺寸同置中。詳情頁 back 制（48→43→39→31dp 演化終態）就係呢個寫法。
+
+#### 19. TopAppBar 會壓低自訂 BrandTitle — 四頁頂欄要統一結構
+* **【問題/限制】**：設置頁用 `TopAppBar(title={BrandTitle()})`，其他三頁用 `Column(padding(top=8.dp)){BrandTitle()}` — TopAppBar 內置 64dp 高度＋垂直置中令品牌行比書架/搜尋/下載低咗一截（用戶一眼睇出「低咗一點」）。
+* **【解決/避坑方案】**：凡自訂高度嘅標題欄唔好放入 TopAppBar，統一 `Column(Modifier.padding(top=8.dp,start=16.dp,end=16.dp))` 結構； Scaffold topBar 直接收 Column 就得。
+
+#### 20. 手寫縮放手勢歸屬：scale==1 時單指「零 consume」先唔搞毀 pager
+* **【問題/限制】**：閱讀器兩指縮放如果用心臟版 `rememberTransformableState`＋`pointerInput` 放頁圖上，單指拖/點都會被手勢識別器食咗 → HorizontalPager 唔翻頁、tap 冇反應；`awaitEachGesture` 起手 `awaitFirstDown(requireUnconsumed=true)` 亦會吞 first tap。
+* **【解決/避坑方案】**（已寫入 `ZoomablePage`，Realme 實機 OK）：`awaitFirstDown(requireUnconsumed=false)` → do-loop 入面先判 `scale>1f || 指頭數≥2` 才 consume＋`onClaim`（多頁共享「邊頁喺放大」狀態）；scale==1 時單指事件完全唔碰 — pager/tap 照常。抬手 `scale≤1.02 → 復位 1f`；`zoomScale` 提升去頁級共享 → `userScrollEnabled = zoomScale≤1.001`；換章/轉模式 LaunchedEffect 強制復位。
+
+#### 21. enableEdgeToEdge 下露嘅係 windowBackground — 日夜要 theme＋decor 兩層同步
+* **【問題/限制】**：`enableEdgeToEdge()` 後狀態欄/鑽孔/導航欄透明，露出嘅係 **window background**：硬嚟 `Theme.Material.Light`（白底）時，暗黑模式沉浸式閱讀器頂部會留一條白（Compose 層 background 改唔到佢）；而 Compose 嘅 `isSystemInDarkTheme()` 又管唔到 activity theme 層。
+* **【解決/避坑方案】**：`values/themes.xml`（light：白 windowBackground）＋ `values-night/themes.xml`（黑）双双定義 `Theme.MangaCopy`（bars 透明）；再由 `syncWindow(dark)` SideEffect 跟 UiTheme 三態即時改 `decorView.setBackgroundColor` ＋ `isAppearanceLightStatusBars` — 設置頁轉主題即刻見效，唔使重啟。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*

@@ -1,7 +1,25 @@
-# MangaCopy Android（app 模組）
+# KIECOMIC Android（app 模組）
 
 Android APK：喺手機/平板 **搜尋瀏覽 → 收藏 → 下載 → 離線閱讀** CopyManga 漫畫。
 同桌面版（`cm/` + `app.py`）共用同一個倉庫同同一套業務邏輯（1:1 移植）。
+**v0.3.2 起品牌統一為「KIECOMIC」**（launcher 名稱／icon／全局標題欄均係，
+LOGO 素材 `res/drawable-nodpi/kie_logo.png`）。
+
+## v0.3.2 重點（2026-11-17）
+
+- 🏷 **品牌 KIECOMIC**：launcher label＋adaptive icon＋`BrandTitle` 全局標題欄
+  （LOGO＋KIECOMIC＋版本徽章一行）；四頁頂欄結構/高度統一（設置頁棄 TopAppBar）
+- 🎛 **頂欄全面 icon 化**（根治 425dp 窄屏文字掣同品牌重疊）：下載頁
+  PlayArrow/Stop/DeleteSweep/Delete/SelectAll/Clear/Close；書架 Refresh；
+  詳情頁〔批量/更新/排序/收藏〕四 icon；back 圓底 31dp；搜尋「共 N 部」右上徽章
+- 🔍 **章節 GRID 純色系**：零 tick — surface/secondaryContainer（已下）/
+  primaryContainer＋描邊（在讀）/tertiaryContainer（揀中）/紅框（error）；16sp 垂直置中
+- 🤏 **兩指縮放**（`ZoomablePage` 手寫 awaitEachGesture：單指 1× 時零干預、兩指先
+  consume；1–4×＋pan clamp；抬手復位；縮放中鎖 pager）
+- 🖥 **全屏閱讀**（kv `read_immersive`）：默認收全部 UI，tap 中間喚醒、5 秒自動收
+- 🌗 **日夜視窗同步**：`values(-night)/themes.xml`＋`syncWindow(dark)` — 沉浸式頂部白欄根治；
+  **橫屏安全區**：根 Box `safeDrawingPadding()`（status bar/鑽孔/nav 一次 consume）
+- 📚 書架封面徽章：刪左上進度藥丸、置頂 ⭐ 大 1.5 倍、新章徽章改「NEW」
 
 ## 功能（v0.3.1）
 

@@ -1,5 +1,54 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-17 — 新功能：KIECOMIC Android v0.3.2（品牌改名 KIECOMIC ＋ 全頁 icon 化 ＋ 兩指縮放 ＋ 全屏閱讀 ＋ 日夜視窗同步）
+
+### 🏷 品牌統一「KIECOMIC」（开发者：「app 名稱改 KIECOMIC，呢個亦係整體以後嘅名」）
+- `AndroidManifest` launcher label、全局標題欄（ComfyUI LOGO＋KIECOMIC 字標＋版本徽章
+  `BrandTitle`）、設置頁關於、launcher icon（`res/drawable-nodpi/kie_logo.png`＋
+  adaptive icon anydpi-v26）全部統一；四頁頂欄高度對齊（設置頁棄用 TopAppBar 改
+  Column padding(top=8)，同書架/搜尋/下載一致）
+
+### 🎛 頂欄按鈕群全面 icon 化（窄屏 425dp 根治重疊）
+- **下載頁**：開始下載→▶ PlayArrow、停止→■ Stop（error 色）、清除全部→DeleteSweep、
+  刪除全部→Delete、全選/取消全選/離開→SelectAll/Clear/Close（旧「清除全部」文字掣
+  同品牌重疊 bug 一併根治）
+- **書架**：全部更新書單→Refresh icon（更新中轉圈仔）；刪「收藏 N 部」閑置行
+- **詳情頁**：頂欄四 icon〔批量選擇 SelectAll／更新章節 Refresh／排序 Sort+DropdownMenu／
+  收藏 Star〕；卡內「更新章節」文字掣與排序 chips 全部上移；back 圓底 48→43→39→31dp
+- **搜尋頁**：部數改「共 N 部」徽章放品牌行右上角
+
+### 🔍 章節 GRID 純色系零符號（开发者：「唔使打 tick，用顏色表達在讀/有下載/冇下載」）
+- 冇下載＝surface／已下載＝secondaryContainer／閱讀中＝primaryContainer＋1.5dp primary
+  描邊／揀中＝tertiaryContainer／出錯＝紅框；標題 16sp（bodyMedium）＋Box 置中真·垂直置中
+
+### 🤏 閱讀器兩指縮放 ＋ 全屏模式
+- `ZoomablePage`：手寫 `awaitEachGesture`＋`calculateZoom/calculatePan` — scale==1 單指
+  完全唔 consume（pager/tap 照常）、兩指落即 onClaim＋consume；pinch-to-zoom 1–4×＋
+  pan clamp `±(scale-1)*size/2`；抬手 ≤1.02 自動復位；共享 `zoomScale` →
+  `userScrollEnabled` 鎖 pager 防邊縮邊甩頁；換章/轉模式自動復位
+- **全屏閱讀**（kv `read_immersive`）：開關喺閱讀器面板；默認收埋工具欄/頁碼藥丸/滑杆，
+  tap 畫面中間顯示、5 秒無操作自動收回全屏（面板開緊暫停倒數）
+- 工具欄刪左右章按鈕；滑杆改膠囊（RoundedCornerShape 50%）左右留 5% 邊位；
+  副標題刪「後面已備 N 頁」
+
+### 🌗 系統級視覺修復
+- **日夜視窗同步**：`values(-night)/themes.xml`（Theme.MangaCopy 白/黑 windowBackground＋
+  透明 bars）＋ `syncWindow(dark)` SideEffect（decor 底色＋system bars 圖標深淺跟 UiTheme
+  三態即時切換）— 沉浸式閱讀頂部白欄根治
+- **橫屏安全區**：MainActivity 根 `Box(safeDrawingPadding())` — enableEdgeToEdge 下
+  status bar／鑽孔／nav bar 一次 consume，橫屏 top bar 唔再俾遮
+
+### 📚 書架封面徽章重構（开发者：「左上唔使顯示下載咗幾多、置頂星大 1.5 倍、新章顯示 NEW」）
+- 刪左上進度藥丸；置頂 ⭐ 11sp→17sp；新章徽章「+N 新章」→「NEW」（仍只計更新書單
+  diff 且未落盤嘅章，右下角位置不變）
+
+### 🧬 數據層同輪修復（配合 0.3.2）
+- `CopyMangaSource` 域名探測自癒（死域自動跳下一候選）；`ChapterPreloader` 完成判定
+  防 false-complete（只認 chapters.status／done≥expected）；`Db.ensureColumns` 冪等
+  遷移；`DownloadEngine` paused/queue_order 狀態機；`ListUpdater` 新章 diff 標記
+- 測試：`testDebugUnitTest` 7/7 ✓、`assembleDebug` ✓、`lintDebug` 0 error ✓
+- 實機（Realme RMX5060 1264×2780 真實站）：四頁頂欄/詳情頁/書架/閱讀器全屏全鏈路截圖验收 ✓
+
 ## 2026-11-17 — 改進：MangaCopy Android v0.3.1（全章拖曳佔位 ＋ 降落頁優先 ＋ 頭卡回上一章 ＋ 跨章保護閘加固）
 
 ### 🖐 全章拖曳佔位制（开发者：「下方拖拉時可以一直拖拉，圖片一直更新」）
