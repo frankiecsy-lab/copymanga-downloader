@@ -154,9 +154,9 @@ fun App() {
         } else {
             Scaffold(
                 bottomBar = {
-                    // 用戶（2026-11-17 兩輪）：「taskbar 矮一點」→「還是高」—
-                    // 預設 80dp → 60dp → 52dp（icon 24＋label 16＋縫隙 4 剛好企穩，再矮會切字）
-                    NavigationBar(Modifier.height(52.dp)) {
+                    // 用戶（2026-11-17 四輪）：「矮一點」→「還是高」→「44dp」→「40dp」—
+                    // 80→60→52→44→40dp 極矮化（M3 item 內部自動縮 padding，實機核對無切字）
+                    NavigationBar(Modifier.height(40.dp)) {
                         DESTS.forEach { d ->
                             NavigationBarItem(
                                 selected = currentRoute == d.route,

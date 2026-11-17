@@ -16,8 +16,8 @@
 - 配合既有：tap 中央顯示 UI → **5 秒無操作自動收返全屏**（流水模式實測
   顯示→6 秒收回全部通過）
 
-### 📏 底部 taskbar 矮化（用戶兩輪：「矮一點」→「還是高」）
-- `NavigationBar` 高度預設 80dp → 60dp → **52dp**（icon 24＋label 16＋縫隙剛好企穩）
+### 📏 底部 taskbar 矮化（用戶四輪：「矮一點」→「還是高」→「44dp」→「40dp」）
+- `NavigationBar` 高度預設 80dp → 60dp → 52dp → 44dp → **40dp**（實機核對 icon＋label 完整無切）
 
 - 版本 0.3.3（versionCode 6）；三件套 testDebugUnitTest 7/7、assembleDebug、
   lintDebug 全過；Realme 實機：流水模式入 232 話 → tap 中央出 UI → 5 秒自動收 ✓
