@@ -9,11 +9,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.mangacopy.app.data.AppConfig
 import com.mangacopy.app.data.Db
 import com.mangacopy.app.data.Storage
 import com.mangacopy.app.download.DownloadEngine
 import com.mangacopy.app.download.ListUpdater
-import com.mangacopy.app.download.Outputs
 import com.mangacopy.app.source.SourceRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -24,22 +24,22 @@ object ReaderPrefs {
     const val RTL = "read_rtl"          // true = 漫畫式右到左
     const val SPREAD = "read_spread"    // true = 雙頁
     const val KEEP_SCREEN_ON = "read_keep_screen_on"
+    const val IMMERSIVE = "read_immersive"   // 用戶：「全屏唔顯示 UI，按一下中間先顯示」
 
     fun mode(db: Db) = db.getMeta(MODE, "paged")
     fun rtl(db: Db) = db.getMeta(RTL, "true") != "false"
     fun spread(db: Db) = db.getMeta(SPREAD, "false") != "false"
     fun keepScreenOn(db: Db) = db.getMeta(KEEP_SCREEN_ON, "true") != "false"
+    fun immersive(db: Db) = db.getMeta(IMMERSIVE, "false") == "true"
 }
 
 /**
- * 設置 — 下載源（現只 CopyManga，預留擴展）、輸出格式（WEBP/CBZ 可揀，1:1 對應桌面版）、
- * 閱讀默認、儲存用量。
+ * 設置 — 下載源（現只 CopyManga，預留擴展）、閱讀默認、儲存用量。
+ * 輸出格式固定全部 WebP（用戶 2026-11-17：「刪除 CBZ 嘅選擇，默認全部 WEBP」— 開關區已移除）。
  */
 @Composable
 fun SettingsScreen() {
     val db = remember { Db.get() }
-    var cbzOn by remember { mutableStateOf(Outputs.outputFlags(db).first) }
-    var webpOn by remember { mutableStateOf(Outputs.outputFlags(db).second) }
     var mode by remember { mutableStateOf(ReaderPrefs.mode(db)) }
     var rtl by remember { mutableStateOf(ReaderPrefs.rtl(db)) }
     var spread by remember { mutableStateOf(ReaderPrefs.spread(db)) }
@@ -53,7 +53,18 @@ fun SettingsScreen() {
         }
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("設置") }) }) { pad ->
+    val bg = tabBackground("settings")   // 淡紫：tab 背景區分（用戶要求）
+    Scaffold(
+        containerColor = bg,
+        topBar = {
+            // 用戶（2026-11-17）：「設置嘅 title 跟另外三個頁面低咗一點」—
+            // 唔再用 TopAppBar（內置 64dp 高度＋內容 padding 會壓低品牌行），
+            // 改同書架/搜尋/下載一樣嘅 Column padding(top=8) 結構，四頁高度一致
+            Column(Modifier.padding(top = 8.dp, start = 16.dp, end = 16.dp)) {
+                BrandTitle()
+            }
+        },
+    ) { pad ->
         Column(Modifier.padding(pad).verticalScroll(rememberScrollState())) {
 
             SectionTitle("下載源")
@@ -65,7 +76,7 @@ fun SettingsScreen() {
                     RadioButton(selected = true, onClick = {})
                     Column(Modifier.padding(start = 8.dp)) {
                         Text(s.displayName)
-                        Text("站點渲染繞過 WAF · webp/CBZ 輸出",
+                        Text("站點渲染繞過 WAF · 全部輸出 WebP",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -96,30 +107,6 @@ fun SettingsScreen() {
                             ) { Text(label, maxLines = 1) }
                         }
                 }
-            }
-
-            SectionTitle("輸出格式（影響新完成嘅章節）")
-            Row(Modifier.padding(horizontal = 16.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text("WebP 圖片")
-                    Text("頁面存做 .webp（省空間，App 內閱讀）",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = webpOn, onCheckedChange = {
-                    webpOn = it; db.setMeta("output_webp", if (it) "1" else "0")
-                })
-            }
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text("CBZ compressed 漫畫檔")
-                    Text("每卷打包 <名>_<作者>_vol_NN.cbz（可攜去其他閱讀器）",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = cbzOn, onCheckedChange = {
-                    cbzOn = it; db.setMeta("output_cbz", if (it) "1" else "0")
-                })
             }
 
             SectionTitle("清單與預載")
@@ -230,7 +217,7 @@ fun SettingsScreen() {
 
             SectionTitle("關於")
             Text(
-                "MangaCopy Android 0.3.1\n源碼同桌面版一庫：copymanga-downloader",
+                "KIECOMIC v${AppConfig.VERSION_NAME}（Android）\n源碼同桌面版一庫：copymanga-downloader",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

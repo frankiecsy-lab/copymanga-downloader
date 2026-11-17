@@ -1,11 +1,13 @@
 package com.mangacopy.app.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -39,14 +41,14 @@ import com.mangacopy.app.source.SourceRegistry
 fun DetailScreen(nav: NavHostController, slug: String) {
     val db = remember { Db.get() }
     var comic by remember { mutableStateOf(db.getComic(slug)) }
-    // 排序：title_desc（默認，用戶要求倒序）/ flow（閱讀序）/ title / pending_first
-    var sort by remember { mutableStateOf(db.getMeta("chapter_sort", "title_desc") ?: "title_desc") }
+    // 排序（用戶 2026-11-17：「消除流式顯示及未下載優先，保留正序及倒序」）：
+    // 得返 title / title_desc（默認倒序）；舊 kv 存嘅 flow/pending_first 自動歸正為默認值
+    var sort by remember { mutableStateOf(
+        if (db.getMeta("chapter_sort", "title_desc") == "title") "title" else "title_desc") }
+    var sortMenu by remember { mutableStateOf(false) }   // 頂欄排序 icon 嘅 DropdownMenu
     // 上次阅读进度（kv last_read:<slug> = cid，ReaderScreen 持續更新）
     var lastCid by remember { mutableStateOf(db.getMeta("last_read:$slug", null)) }
-    val orderOf: (String) -> String = {
-        when (it) { "title" -> "title"; "title_desc" -> "title_desc";
-                    "pending_first" -> "pending_first"; else -> "flow" }
-    }
+    val orderOf: (String) -> String = { if (it == "title") "title" else "title_desc" }
     var chapters by remember { mutableStateOf(db.allChapters(slug, orderOf(sort))) }
     var showSynopsis by remember { mutableStateOf(false) }
     val engineState by DownloadEngine.state.collectAsState()
@@ -129,17 +131,54 @@ fun DetailScreen(nav: NavHostController, slug: String) {
             } else TopAppBar(
                 title = { Text(comic?.displayName ?: "", maxLines = 1) },
                 navigationIcon = {
-                    IconButton(onClick = { nav.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
+                    // 返回箭嘴加圓形底（用戶：「要加圓型底」＋「少 10%」＋「再少 20%」— 48→43→39→31dp）。
+                    // 31dp 細圈用唔著 IconButton（M3 呢版冇 contentPadding 參數、預設 12dp 會迫爆），
+                    // 直接 Surface＋clickable＋置中 18dp 箭嘴
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.size(31.dp).clip(CircleShape)
+                            .clickable { nav.popBackStack() },
+                    ) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回",
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(18.dp))
+                        }
                     }
                 },
                 actions = {
-                    // 批量下載模式入口（用戶要求：點擊下載先出現批量模式）
+                    // 用戶（2026-11-17）：「批量選擇左邊用 icon；更新章節、排序都移去右上 icon」—
+                    // 頂欄一次過：〔批量選擇〕〔刷新=更新章節〕〔排序 menu〕〔收藏〕
                     IconButton(
                         enabled = chapters.isNotEmpty(),
                         onClick = { selectMode = true },
                     ) {
                         Icon(Icons.Filled.SelectAll, "批量下載模式")
+                    }
+                    IconButton(
+                        enabled = !refreshing,
+                        onClick = { refreshTick++ },
+                    ) {
+                        if (refreshing)
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Filled.Refresh, "更新章節")
+                    }
+                    Box {
+                        IconButton(
+                            enabled = chapters.isNotEmpty(),
+                            onClick = { sortMenu = true },
+                        ) { Icon(Icons.Filled.Sort, "章節排序") }
+                        DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                            listOf("title" to "章節正序", "title_desc" to "章節倒序")
+                                .forEach { (v, label) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        trailingIcon = { if (sort == v) Icon(Icons.Filled.Check, null) },
+                                        onClick = { sort = v; sortMenu = false },
+                                    )
+                                }
+                        }
                     }
                     IconButton(
                         onClick = {
@@ -225,16 +264,7 @@ fun DetailScreen(nav: NavHostController, slug: String) {
                                 modifier = Modifier.widthIn(max = 210.dp),
                             )
                         }
-                        OutlinedButton(
-                            enabled = !engineState.running && !refreshing,
-                            onClick = { refreshTick++ },
-                        ) {
-                            if (refreshing) {
-                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(6.dp))
-                                Text("更新中…")
-                            } else Text("更新章節")
-                        }
+                        // 「更新章節」已移去頂欄 Refresh icon（用戶 2026-11-17）
                         // 2026-11-17 用戶要求：「從頭睇」— 永遠跳數字第一話（第01話/第01卷）
                         if (seenCid != null) {
                             OutlinedButton(
@@ -263,23 +293,7 @@ fun DetailScreen(nav: NavHostController, slug: String) {
             }
 
             HorizontalDivider(Modifier.padding(top = 4.dp))
-
-            // 章節排序（流式按鍵，默認「流式」= 站點原序）
-            if (chapters.isNotEmpty()) {
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    listOf("flow" to "流式", "title" to "章節正序", "title_desc" to "章節倒序",
-                           "pending_first" to "未下載優先").forEach { (v, label) ->
-                        FilterChip(
-                            selected = sort == v,
-                            onClick = { sort = v },
-                            label = { Text(label, style = MaterialTheme.typography.labelMedium) },
-                        )
-                    }
-                }
-            }
+            // 章節排序 chips 已移去頂欄 Sort icon 嘅 DropdownMenu（用戶 2026-11-17）
 
             if (loadingChapters) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -328,9 +342,6 @@ fun DetailScreen(nav: NavHostController, slug: String) {
                             selectMode = true
                             selected = if (isSel) selected - ch.chapterId else selected + ch.chapterId
                         },
-                        onCheck = { on ->
-                            selected = if (on) selected + ch.chapterId else selected - ch.chapterId
-                        },
                     )
                 }
             }
@@ -338,24 +349,32 @@ fun DetailScreen(nav: NavHostController, slug: String) {
     }
 }
 
-/** 章節 GRID 按鈕：已下載 ✓／出錯紅框／正在閱讀高亮；選擇模式加 Checkbox。 */
+/**
+ * 章節 GRID 按鈕 — **純色系零符號**（用戶 2026-11-17：「唔使打 tick，用唔同顏色表示
+ * 目前在讀／有下載／冇下載」）：
+ *   冇下載 ＝ surface 預設；已下載 ＝ secondaryContainer；
+ *   閱讀中 ＝ primaryContainer ＋ primary 描邊；揀中 ＝ tertiaryContainer；出錯 ＝ 紅框。
+ * 標題永遠顯示（select mode 都睇到章節名）。
+ */
 @Composable
 private fun ChapterGridButton(
     title: String, done: Boolean, err: Boolean, current: Boolean,
     selectMode: Boolean, isSel: Boolean,
-    onClick: () -> Unit, onLongClick: () -> Unit, onCheck: (Boolean) -> Unit,
+    onClick: () -> Unit, onLongClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(10.dp)
     val bg = when {
-        isSel -> MaterialTheme.colorScheme.primaryContainer
-        current -> MaterialTheme.colorScheme.secondaryContainer
+        isSel -> MaterialTheme.colorScheme.tertiaryContainer
+        current -> MaterialTheme.colorScheme.primaryContainer
+        done -> MaterialTheme.colorScheme.secondaryContainer
         else -> MaterialTheme.colorScheme.surface
     }
     Surface(
         color = bg,
         shape = shape,
-        border = BorderStroke(1.dp, when {
+        border = BorderStroke(if (current) 1.5.dp else 1.dp, when {
             err -> MaterialTheme.colorScheme.error
+            current -> MaterialTheme.colorScheme.primary   // 閱讀中：primary 描邊格外突出
             bg != MaterialTheme.colorScheme.surface -> Color.Transparent
             else -> MaterialTheme.colorScheme.outlineVariant
         }),
@@ -365,26 +384,17 @@ private fun ChapterGridButton(
             .clip(shape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
-        Row(
-            Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (selectMode) {
-                Checkbox(checked = isSel, onCheckedChange = onCheck)
-            } else {
-                if (err) {
-                    Icon(Icons.Filled.ErrorOutline, "出錯", modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.error)
-                    Spacer(Modifier.width(3.dp))
-                } else if (done) {
-                    Icon(Icons.Filled.CheckCircle, "已下載", modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(3.dp))
-                }
-                Text(title, style = MaterialTheme.typography.labelMedium,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
-            }
+        // 標題獨留全格（零 ✓／error 符號 — 狀態一律靠底色／紅框表達）。
+        // 用戶（2026-11-17）：「幾多話章節嘅字要大一點、垂直置中」—
+        // labelMedium(12sp)→bodyMedium(16sp)，Box contentAlignment=Center 做真·垂直置中
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                title,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
         }
     }
 }

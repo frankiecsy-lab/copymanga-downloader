@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- KIECOMIC 品牌紫（ComfyUI z-image-turbo LOGO 主色 #8D2FDE）— adaptive icon 背景層 -->
+    <color name="ic_launcher_background">#8D2FDE</color>
+</resources>

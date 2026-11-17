@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 夜間模式視窗主題：windowBackground 黑 — 閱讀器沉浸式時頂部唔會留白欄 -->
+<resources>
+    <style name="Theme.MangaCopy" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

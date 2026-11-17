@@ -1,8 +1,12 @@
 package com.mangacopy.app.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Download
@@ -24,6 +28,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -136,8 +141,14 @@ fun App() {
                         )
                     }
                 }
-                androidx.compose.material3.HorizontalDivider()
-                navContent()
+                // 【橫屏白屏元兇】Material3 HorizontalDivider = fillMaxWidth 子節點，
+                // 放喺橫向 Row 會食晒所有剩餘寬 → NavHost 分到 0 寬 → 內容全空白
+                // （2026-11-17 用戶：「橫屏會白屏」）。正解：手寫豎線＋weight 保障內容寬度。
+                Box(
+                    Modifier.fillMaxHeight().width(1.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant)
+                )
+                Box(Modifier.weight(1f).fillMaxHeight()) { navContent() }
             }
         } else {
             Scaffold(

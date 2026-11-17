@@ -119,8 +119,28 @@ fun BrowseScreen(nav: NavHostController) {
     }
 
     Scaffold(
+        containerColor = tabBackground("browse"),   // 淡藍：tab 背景區分（用戶要求）
         topBar = {
             Column(Modifier.padding(top = 8.dp, start = 16.dp, end = 16.dp)) {
+                // 品牌標題欄：LOGO＋KIECOMIC 靠左。
+                // 用戶（2026-11-17）：「顯示有多少部漫畫放到右上角」— 部數徽章放品牌行右端
+                Box(Modifier.fillMaxWidth()) {
+                    BrandTitle()
+                    total?.let {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.align(Alignment.CenterEnd),
+                        ) {
+                            Text("共 $it 部",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
@@ -168,11 +188,7 @@ fun BrowseScreen(nav: NavHostController) {
                         )
                         TextButton(onClick = { query = ""; activeQ = "" }) { Text("返去瀏覽") }
                     }
-                    Spacer(Modifier.width(8.dp))
-                    total?.let {
-                        Text("$it 部", style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+                    // 「N 部」已移去品牌行右上角（用戶 2026-11-17）
                 }
                 if (tagPool.isNotEmpty()) {
                     FlowRow(

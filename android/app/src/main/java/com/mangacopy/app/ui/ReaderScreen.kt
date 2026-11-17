@@ -8,12 +8,17 @@ import androidx.compose.animation.fadeOut
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
@@ -23,7 +28,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -37,6 +44,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import coil.compose.AsyncImage
 import com.mangacopy.app.data.Db
 import com.mangacopy.app.download.ChapterPreloader
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.roundToInt
@@ -74,8 +82,21 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
     var rtl by remember { mutableStateOf(ReaderPrefs.rtl(db)) }
     var spread by remember { mutableStateOf(ReaderPrefs.spread(db)) }
     var keepOn by remember { mutableStateOf(ReaderPrefs.keepScreenOn(db)) }
+    // 全屏模式（用戶 2026-11-17：「閱讀模式加一個全屏唔顯示 UI，按一下中間位置先顯示」）—
+    // ON = 工具欄/滑杆/頁碼藥丸全部收；點擊中間（原有 showBar 切換）先喚返 UI
+    var immersive by remember { mutableStateOf(ReaderPrefs.immersive(db)) }
     var showBar by remember { mutableStateOf(true) }
     var showSheet by remember { mutableStateOf(false) }
+
+    // 用戶（2026-11-17）：「點擊中間顯示 UI..5 秒後自動切換全屏模式」—
+    // UI 顯現（入場／點中間喚醒）後 5 秒無操作即自動收起變全屏；
+    // key 帶 showSheet：設定 sheet 開緊時暫停倒數，收返 sheet 先重新計 5 秒
+    LaunchedEffect(showBar, showSheet) {
+        if (showBar && !showSheet) {
+            delay(5_000)
+            showBar = false
+        }
+    }
 
     // --- 即時預載：preflow 每次 emit 都 bump imgTick → pages 重查 DB 見新頁 ---
     var prog by remember { mutableStateOf(ChapterPreloader.Prog(true, 0, 0)) }
@@ -304,6 +325,16 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
         }
     }
 
+    // --- 兩指縮放（用戶 2026-11-17：「閱讀時圖片可以兩指放大」）---
+    // 以「頁單位」共享嘅縮放狀態：任何頁 scale>1 時 → zoomedUnit 記呢頁 +
+    // zoomScale>1 鎖住 pager 橫滑；ZoomablePage 內部 consume 手勢 → 縮放狀態下
+    // 點擊唔會誤翻頁。切頁 / 切話 / 單雙頁切換一律復位。
+    var zoomedUnit by remember { mutableStateOf(-1) }
+    var zoomScale by remember { mutableStateOf(1f) }
+    LaunchedEffect(pagerState.settledPage, mode, useSpread, currentCid) {
+        zoomedUnit = -1; zoomScale = 1f
+    }
+
     BackHandler { onBack() }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -391,6 +422,8 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
             HorizontalPager(
                 state = pagerState,
                 reverseLayout = rtl,
+                // 縮放進行中鎖橫滑（用戶：兩指放大）— 未放大時照常用單指翻頁
+                userScrollEnabled = zoomScale <= 1.001f,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(),
             ) { page ->
@@ -442,19 +475,24 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     unit.forEachIndexed { i, f ->
-                        if (f != null) AsyncImage(
-                            model = f, contentDescription = null,
-                            contentScale = ContentScale.Fit,
+                        if (f != null) ZoomablePage(
                             modifier = Modifier.weight(1f).fillMaxHeight(),
-                        )
+                            isZoomed = zoomedUnit == page,
+                            onClaim = { zoomedUnit = page },
+                            onScale = { s -> zoomScale = s; if (s <= 1f) zoomedUnit = -1 },
+                        ) {
+                            AsyncImage(
+                                model = f, contentDescription = null,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                         else PageSlotPlaceholder(
                             pageNo = (page - 1) * (if (useSpread) 2 else 1) + i + 1,
                             ready = prog.done, total = totalPages, rendering = prog.rendering,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
-                        if (i == 0 && unit.size == 2) {
-                            Spacer(Modifier.width(1.dp).fillMaxHeight().background(Color.DarkGray))
-                        }
+                        // 用戶：「雙頁顯示，兩頁之間不要留有空間」— 移除 1dp 分隔條，兩頁緊貼
                     }
                 }
             }
@@ -471,7 +509,8 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
         // 滑杆拖曳狀態（頁碼藥丸共用：拖嘅時候即時顯示目標頁）
         var dragF by remember { mutableStateOf<Float?>(null) }
         var lastSeek by remember { mutableStateOf(-1) }
-        if (totalPages > 1) {
+        // 全屏模式：滑杆都收返，靠點擊中間 showBar 一齊顯/收（用戶要求）
+        if (totalPages > 1 && (!immersive || showBar)) {
             val scale = totalPages - 1
             val shown = dragF
                 ?: (curPos.value.toFloat() / scale).coerceIn(0f, 1f)
@@ -489,9 +528,11 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                     }
                 }
             }
+            // 用戶（2026-11-17）：「進度條左右留有 5% 空間，不要太貼邊」— 90% 寬置中 ＋ 圓角膠囊
             Surface(
                 color = Color.Black.copy(alpha = 0.42f),
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                shape = RoundedCornerShape(percent = 50),
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(0.9f),
             ) {
                 Slider(
                     value = shown,
@@ -505,14 +546,13 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                         activeTrackColor = Color.White.copy(alpha = 0.9f),
                         inactiveTrackColor = Color.White.copy(alpha = 0.25f),
                     ),
-                    modifier = Modifier.padding(horizontal = 10.dp),
                 )
             }
         }
 
         // 頁碼藥丸（用戶：「要顯示當前話的第幾頁」）：翻頁/流水都常駐，
         // 分母 = 呢話/卷實際總頁（唔係成部漫畫）；拖滑杆即時預覽目標頁。
-        if (pages.isNotEmpty() && totalPages > 0) {
+        if (pages.isNotEmpty() && totalPages > 0 && (!immersive || showBar)) {
             val onTail = mode == "paged" && pagerState.currentPage >= units.size + 1
             val onHead = mode == "paged" && pagerState.currentPage == 0
             val shownPage = dragF?.let {
@@ -562,29 +602,15 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                                     append("　·　第${curPos.value + 1}/${totalPages}頁")
                                     if (prog.rendering && prog.done < totalPages)
                                         append("　·　成話下載中 ${prog.done}/$totalPages")
-                                    // 本地緩衝：而家呢頁之後已備好幾多頁（翻頁零等待實況）
-                                    val ahead = (pages.size - 1 - curPos.value).coerceAtLeast(0)
-                                    append("　·　後面已備 $ahead 頁")
+                                    // 用戶（2026-11-17）：「後面已備幾多頁唔使顯示」— 删
                                     prog.error?.let { append("　·　$it") }
                                 },
                                 color = Color.LightGray, style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        IconButton(
-                            enabled = chapterIndex > 0,
-                            onClick = { if (chapterIndex > 0) gotoChapter(chapters[chapterIndex - 1].chapterId) },
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "上一章",
-                                tint = if (chapterIndex > 0) Color.White else Color.Gray)
-                        }
-                        IconButton(
-                            enabled = chapterIndex < chapters.size - 1,
-                            onClick = { if (chapterIndex < chapters.size - 1) gotoChapter(chapters[chapterIndex + 1].chapterId) },
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "下一章",
-                                tint = if (chapterIndex < chapters.size - 1) Color.White else Color.Gray)
-                        }
+                        // 用戶（2026-11-17）：「閱讀模式右上角唔使左右鏈」—
+                        // 移除上一章／下一章掣；跨章本来就有滑動頭尾卡＋自動接續
                         IconButton(onClick = { showSheet = true }) {
                             Icon(Icons.Filled.Tune, "閱讀設定", tint = Color.White)
                         }
@@ -627,6 +653,20 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
                     }
                     Switch(checked = spread, enabled = mode == "paged", onCheckedChange = {
                         spread = it; db.setMeta(ReaderPrefs.SPREAD, if (it) "true" else "false")
+                    })
+                }
+                // 全屏模式（用戶 2026-11-17：「加一個全屏唔顯示 UI」「按一下中間位置先顯示」）
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("全屏模式")
+                        Text("收起全部 UI（工具欄／滑杆／頁碼）· 點擊中間先顯示",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = immersive, onCheckedChange = {
+                        immersive = it
+                        db.setMeta(ReaderPrefs.IMMERSIVE, if (it) "true" else "false")
+                        if (it) showBar = false   // 一開即全屏；中間点击先喚返 UI
                     })
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -673,6 +713,66 @@ private fun PrevChapterCard(title: String?, hasPrev: Boolean, modifier: Modifier
             Text("—— 第一章 · 由頭開始 ——",
                 color = Color.Gray, style = MaterialTheme.typography.bodySmall)
         }
+    }
+}
+
+/**
+ * 兩指縮放頁（用戶 2026-11-17：「閱讀時圖片可以兩指放大」）—
+ * 手寫 awaitEachGesture 而唔用 rememberTransformableState，因為要**精細控制手勢歸屬**：
+ *   • scale==1 且單指：完全唔 consume → Row 嘅點擊翻頁 / Pager 單指橫滑照常；
+ *   • 兩指落（multi）：即時 onClaim 宣示主權（外層鎖 pager）＋開始 pinch；
+ *   • scale>1：所有觸控 consume＋pan 拖曳（clamp 唔甩邊）→ 縮放中點擊唔會誤翻頁；
+ *   • 抬手 scale≈1 自動復位；換頁（isZoomed=false）強制復位。
+ * 縮放實現 = graphicsLayer scale/translation（唔重新 layout，1 到 4 倍流暢）。
+ */
+@Composable
+private fun ZoomablePage(
+    modifier: Modifier = Modifier,
+    isZoomed: Boolean,
+    onClaim: () -> Unit,
+    onScale: (Float) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    if (!isZoomed && scale != 1f) { scale = 1f; offset = Offset.Zero }   // 換頁強制復位
+    LaunchedEffect(scale) { onScale(scale) }
+
+    Box(
+        modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                do {
+                    val event = awaitPointerEvent()
+                    val multi = event.changes.count { it.pressed } >= 2
+                    if (scale > 1f || multi) {
+                        if (multi) onClaim()
+                        val newScale = (scale * event.calculateZoom()).coerceIn(1f, 4f)
+                        val maxX = (newScale - 1f) * size.width / 2f
+                        val maxY = (newScale - 1f) * size.height / 2f
+                        val pan = event.calculatePan()
+                        offset = Offset(
+                            (offset.x + pan.x).coerceIn(-maxX, maxX),
+                            (offset.y + pan.y).coerceIn(-maxY, maxY),
+                        )
+                        scale = newScale
+                        if (scale <= 1.001f) offset = Offset.Zero
+                        event.changes.forEach { it.consume() }
+                    }
+                } while (event.changes.any { it.pressed })
+                if (scale <= 1.02f) { scale = 1f; offset = Offset.Zero }  // 輕放開 = 還原
+            }
+        },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.fillMaxSize().graphicsLayer {
+                scaleX = scale; scaleY = scale
+                translationX = offset.x; translationY = offset.y
+            },
+            contentAlignment = Alignment.Center,
+            content = { content() },
+        )
     }
 }
 

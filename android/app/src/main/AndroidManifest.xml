@@ -7,11 +7,12 @@
 
     <application
         android:name=".MangaCopyApp"
-        android:label="MangaCopy"
-        android:icon="@android:drawable/ic_menu_gallery"
+        android:label="KIECOMIC"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.MangaCopy">
 
         <activity
             android:name=".MainActivity"

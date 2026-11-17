@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 淺色模式視窗主題：用戶「上面白色可以都變黑嗎？要跟淺深色模式配合」—
+     狀態欄/鑽孔一帶嘅底色 = windowBackground（淺色 = 白、夜間 = 黑），
+     system bars 透明交由 Compose 內容延伸；冷啟動閃屏色都跟足日夜。 -->
+<resources>
+    <style name="Theme.MangaCopy" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>
