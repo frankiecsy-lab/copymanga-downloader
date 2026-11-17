@@ -44,7 +44,13 @@ object ChapterPreloader {
      */
     private val active = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
-    fun preflow(slug: String, cid: String): Flow<Prog> = callbackFlow {
+    /**
+     * priorityPage：閱讀器「降落頁」優先落盤（2026-11-17 用戶：「上咗尾頁，
+     * 先讀尾頁出來先至自動下載其他頁數」— 跨章回上一章／readPos 喺尾段時，
+     * 入章即刻見到的應該係降落嗰頁，唔係由第 1 頁排起、降落頁長期佔位）。
+     * 只影響 pending 出隊次序（降落頁排最前，其餘照升序），唔改下載範圍。
+     */
+    fun preflow(slug: String, cid: String, priorityPage: Int = -1): Flow<Prog> = callbackFlow {
         // 必須 Dispatchers.IO：collect 者（閱讀器 LaunchedEffect）喺主線程，
         // 預設 inherit 會令 OkHttp 同步下載堵死主線程（實測踩過）
         val job = launch(kotlinx.coroutines.Dispatchers.IO) {
@@ -119,17 +125,44 @@ object ChapterPreloader {
                     val exp = db.getChapter(slug, cid)?.expectedPages ?: 0
                     if (imgs.isEmpty() || (exp > 0 && imgs.size < exp)) {
                         trySend(Prog(true, imgs.count { it.status == "done" }, maxOf(imgs.size, exp)))
-                        val rendered = withTimeoutOrNull(150_000L) {
-                            runCatching {
-                                WebViewRenderer.renderChapter(ch.url) { urls, total ->
-                                    // onPartial 喺 IO 協程被同步回調：DB 寫入快、trySend 非阻塞
-                                    try {
-                                        db.addImages(slug, cid, urls)
-                                        total?.let { db.setChapterExpected(slug, cid, it) }
-                                        emitState(null)
-                                    } catch (e: Exception) { Log.w("MCPRE", "addImages: ${e.message}") }
+                        // 2026-11-17 用戶：「下載咗第一頁就顯示，唔好落咗幾十頁先更新」—
+                        // 舊版要 render（成話清單，可達幾十秒）完晒先開始落圖，首頁見得太慢。
+                        // 新版：drainer 與 render **並行** — onPartial 一有 URL 入 DB，
+                        // drainer 即刻 4 lane 開落；第 1 頁由 URL 到手到好盤 <1 秒，
+                        // 閱讀器（占位制）即刻見真圖。render 完 drainer 自己啃晒尾數先收工。
+                        val renderDone = java.util.concurrent.atomic.AtomicBoolean(false)
+                        val rendered = kotlinx.coroutines.coroutineScope {
+                            val drainer = launch {
+                                while (true) {
+                                    val pend = db.pendingImages(slug, cid)
+                                        .filter { it.url != null }.sortedBy { it.pageIndex }
+                                        // 降落頁優先出隊（穩定排序：priority 抽去最前，其餘保升序）
+                                        .sortedBy { if (it.pageIndex == priorityPage) 0 else 1 }
+                                    if (pend.isEmpty()) {
+                                        if (renderDone.get()) break
+                                        delay(150); continue
+                                    }
+                                    kotlinx.coroutines.coroutineScope {
+                                        pend.take(4).map { p -> launch { fetch(p.url!!, p.pageIndex) } }
+                                    }
+                                    emitState(null)
                                 }
-                            }.getOrNull()
+                            }
+                            val r = withTimeoutOrNull(150_000L) {
+                                runCatching {
+                                    WebViewRenderer.renderChapter(ch.url) { urls, total ->
+                                        // onPartial 喺 IO 協程被同步回調：DB 寫入快、trySend 非阻塞
+                                        try {
+                                            db.addImages(slug, cid, urls)
+                                            total?.let { db.setChapterExpected(slug, cid, it) }
+                                            emitState(null)
+                                        } catch (e: Exception) { Log.w("MCPRE", "addImages: ${e.message}") }
+                                    }
+                                }.getOrNull()
+                            }
+                            renderDone.set(true)
+                            drainer.join()
+                            r
                         }
                         if (rendered != null && rendered.urls.isNotEmpty()) {
                             db.addImages(slug, cid, rendered.urls)
@@ -155,6 +188,7 @@ object ChapterPreloader {
                         while (true) {
                             val pend = db.pendingImages(slug, cid)
                                 .filter { it.url != null }.sortedBy { it.pageIndex }
+                                .sortedBy { if (it.pageIndex == priorityPage) 0 else 1 }
                             if (pend.isEmpty()) break
                             val beforeDone = db.allImages(slug, cid).count { it.status == "done" }
                             kotlinx.coroutines.coroutineScope {
@@ -187,6 +221,11 @@ object ChapterPreloader {
                         trySend(Prog(false, doneN, maxOf(allImgs.size, expected)))
                         break
                     }
+                    // 2026-11-17 實測修復：呢條路徑（有 pending 但 drainer 冇嘢可落，例如
+                    // url 缺失嘅殘行）由頭到尾冇 emit → 閱讀器 prog 永遠停喺初始 0/0，
+                    // 副標題誤顯示「成話下載中 0/已備頁數」、量程缺 → readPos 等唔切恢復。
+                    // 每輪結尾如實 emit 進度，閱讀器先可以攞到真 total 做恢復定位。
+                    trySend(Prog(true, doneN, maxOf(allImgs.size, expected)))
                     if (++round >= 20) {
                         // 站點限速補唔齊 → 如實報錯（閱讀器容許手動逃去下一章），唔准扮完成
                         trySend(Prog(false, doneN, maxOf(allImgs.size, expected),

@@ -79,11 +79,18 @@ fun App() {
     val currentRoute = backStack?.destination?.route
 
     val navigate: (String) -> Unit = { route ->
+        // 用戶要求：撳下方任一 tab（書架／搜尋／下載／設置）都要落返嗰個 tab 嘅「根板」清單，
+        // 唔准逗留喺詳情頁／章節清單／閱讀器。
+        // 旧版用官方 bottom-nav 模板嘅 saveState/restoreState — 但 detail/reader/history 係
+        // push 喺同一個 NavHost、掛喺書架之上嘅兄弟路由：離開時 popUpTo(bookshelf){saveState=true}
+        // 會將連同 detail 嘅整條堆疊 snapshot 存低，再撳返書架就 restoreState 連 detail 一齊还原
+        // → 人就「逗留喺章節」、返唔到根清單（實測踩中）。
+        // 正解：tab 切換唔 save/restore state，只用純 popUpTo + launchSingleTop ——
+        // 每次切換都係乾淨地回到目標 tab 根清單；launchSingleTop 同時避免書架→搜尋→書架…越堆越深。
+        // 代價：切 tab 唔保留各清單嘅捲軸位置（「必落根板」優先於捲軸記憶）。
         nav.navigate(route) {
             launchSingleTop = true
-            // 頂層四頁之間切換時清返堆疊，避免書架→發現→書架…越堆越深
-            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-            restoreState = true
+            popUpTo(nav.graph.findStartDestination().id)
         }
     }
 

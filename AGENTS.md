@@ -116,9 +116,9 @@
   6. 章節 url 欄直接寫假站 URL 入 seed → WebViewRenderer/renderChapter/逐頁下載/跨章預載全部行**真實代碼路徑**
 * **【注意】**：Git Bash 會 mangle `/data/...` 路徑 → adb shell 指令一律加 `MSYS_NO_PATHCONV=1`；background http server 有時間上限會自動俾 kill，長 test 要設大 `timeout`。
 
-#### 11. CopyManga 站點域現狀（2026-11-17 實測）
-* **【問題/限制】**：詳情頁全线維護 — `.fun` 404「服務器搬遷維護中」、`.site` 5.6KB WAF redirect shell、`.io` 連唔上、`.mangacopy.com` 404 + ASUS 路由器 DNS 劫持（cert CN=blocking.asus.hns.tm）。**唯 searchcl 搜尋 API 只喺 `https://www.copymanga.fun` 存活**（JSON code 200）。
-* **【解決/避坑方案】**：App 維持多域名 fallback 策略；搜尋功能用 `.fun` searchcl；詳情/章節 E2E 用本地假站方法論（見第 10 條）替代，站點復原後再跑真實站回归。
+#### 11. CopyManga 站點域現狀（2026-11-17 晚更新）
+* **【問題/限制】**：域現況一日三變 — 日內 `.fun` 詳情頁曾 404「搬遷維護」，**當晚 19:10 實測 `.fun` 詳情頁＋章節頁全活**（5 部書 renderDetail OK、16/189/217 頁 renderChapter OK）；相反 `www.mangacopy.com` 19:06 仲活、19:12 開始被 **ASUS 路由器 DNS 劫持**（`net::ERR_SSL_PROTOCOL_ERROR`、cert `CN=blocking.asus.hns.tm`）— 劫持係**間歇性**，同一 URL 幾分鐘內由活變死。`.site` 5.6KB WAF shell、`.io` 連唔上。
+* **【解決/避坑方案】**：App 維持多域名 probe fallback（MCWEB probe 日誌可判活死）；**DB chapters.url 存嘅係擷取當日嘅域名**，域名死咗舊 URL 就跟住死 — 遇到成章 render EMPTY 先查 logcat 入面嘅 href/error 確認係咪域名劫持，唔好急住改 code。測試用書尽量用 ListUpdater 新列嘅章（自帶活域名 URL）。
 
 #### 12. CopyManga 章節頁 append 只喺「頁面頂部」發生 — dispatchEvent 合成事件秒殺（224 頁 20 秒）
 * **【問題/限制】**：章節頁圖清單係站點 JS 逐頁 append `<li>`，拆包 `https://s3.mangafunb.fun/static/websitefree/js20190704/comic_content_pass202508141534.js`（Dean Edwards packer＋字符串陣列混淆，6157B）去混淆後實錘：`window.onscroll` 內 **`if (ul.offsetTop/16 > scrollY) 先 append 一張`** — 即 append 只喺頁面頂部幾十 px 內先成立；初始 for 循環只吐 3 張；一個合資格 scroll 事件＝+1 頁。任何「滾去底」策略（單向 scrollBy / 底部振盪）都令條件永遠唔成立 → 大卷死喺 3-4 頁。真 scroll 仲有平滑滾動、事件節流、主線程競爭等變數，每輪 append 率唔穩。
@@ -136,5 +136,13 @@
 #### 15. 8 吋 pad（1880×3008）ADB 自動化坐標心得
 * **【問題/限制】**：uiautomator bounds 直接可用（屏幕就係 1880×3008，唔使换算）；但滑杆拖曳好易撳唔中：thumb 跟住當前頁郁（唔係固定 x），起手必須用dump 到嘅 thumb bounds 中心；y 撳太高會落入 pager 變翻頁。
 * **【解決/避坑方案】**：tap 翻頁＝屏幕右側（rtl 書）`input tap 1600 1400`；工具欄副標題/頁碼藥丸可用 `uiautomator dump` + `tr '<'` 分段 grep `text=` 驗證；底部滑杆 thumb 行 **y≈2943**（y=2870 會跌入 pager）；nav 欄 y≈2895；每次測試換唔同卷/話避免 cache 干擾判斷。
+
+#### 16. adb（Windows binary）食 Git Bash 路徑 + run-as 嵌套引號地獄
+* **【問題/限制】**：① `adb push /d/coding/...` **靜默失敗**（adb.exe 係 Windows 程式，唔識 MSYS 路徑；stdout 又被重定向就完全睇唔到錯）→ 後期 `run-as cp` 搵唔到來源，而此之前 `rm databases/mangacopy.db*` 已經執行 = app DB 憑空消失。② `adb shell run-as pkg sh -c 'cmd1; cmd2'` — Git Bash 剝走單引號後，`;` 由 device 外層 shell 執行（run-as 只收到 `sh -c cmd1` 第一個 word），cmd2 以 shell uid 行錯 cwd。
+* **【解決/避坑方案】**：① adb push/pull/install 一律用 Windows 路徑 `D:/dir/file`；push 後必需要 `adb shell ls -la` 核對 size；**rm 舊 DB 一定放喺確認 push 成功之後**。② run-as 多步操作拆成逐條 `adb shell run-as pkg <cmd>` 順序執行（rm / cp / ls 各一條），唔好嵌套 sh -c。③ 萬一 DB 已.rm：PC 有 exec-out cat .pull 嘅快照就照覆 push 返（WAL 要一齊 pull，python 開返會自動 checkpoint 合併）。
+
+#### 17. 閱讀器跨章保護三閘（0.3.1 連環跳章實測教訓）
+* **【問題/限制】**：跨章瞬間 `pagerState` 係**同一個 remember 實例**，currentPage 未 reset 就係舊章 index（尾卡位）。舊代碼 readPos=0 嘅新章 `restoreDone` 初始 true → 第一幀就清 `switching` 屏蔽旗 → 尾卡 auto-advance／頭卡 auto-prev 喺窗口期連環誤觸發（實測：23卷→24卷→25卷附錄 自動連跳，全程零用戶操作）。另外：入章一刻 `prog.total` 未 emit（量程=temporarily 已備頁數）會將尾頁 readPos clamp 去已備尾頁（readPos=216 降落 200）；預載器補頁循環若 pending 全部冇 url 會全程零 emit → prog 永停 0/0、副標題誤報「成話下載中 0/210」。
+* **【解決/避坑方案】**（`ReaderScreen.kt` + `ChapterPreloader.kt`，已實機回归）：① **一律「定位→企穩→先清旗」**：restoreDone 初始 false，readPos=0 都照樣 scrollToPage 第 1 頁，完成先清 switching，所有 auto 跳章 effect 開頭 `if (switching.value) return`；② 恢復跳頁要等 `totalPages > pendingRestore`，只有 `rendering=false`（量程尘埃落定）先容許將「readPos 超出量程」當站點削頁 clamp 尾；③ 補頁循環每輪結尾（含 pend 空路徑）必 `trySend` 當前 done/total；④ 拖曳/量程類 UI 邏輯一律用 badge 總頁（totalPages）唔好用已備頁數。
 
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*

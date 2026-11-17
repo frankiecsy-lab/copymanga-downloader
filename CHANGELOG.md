@@ -1,5 +1,48 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-17 — 改進：MangaCopy Android v0.3.1（全章拖曳佔位 ＋ 降落頁優先 ＋ 頭卡回上一章 ＋ 跨章保護閘加固）
+
+### 🖐 全章拖曳佔位制（开发者：「下方拖拉時可以一直拖拉，圖片一直更新」）
+- 閱讀器顯示量程由「已落盤頁」擴做**全章總頁數**：拖曳條拖盡全章，未落盤頁以 pageIndex
+  對應 `PageSlotPlaceholder`（spinner「第 N 頁 · 準備中 · 已備 x/y」，站點削頁如實顯示
+  「呢頁欠緊」）；`readyByIndex: Map<Int,File>` 令 error 缺頁都唔甩位，一頁落盤 imgTick
+  bump → slot 即時補返真圖（流水模式同款佔位）
+
+### ⚡ 首頁速出 ＋ 降落頁優先落盤（开发者：「下載咗第一頁就顯示」「上咗尾頁，先讀到尾頁出來先至自動下載其他頁數」）
+- `ChapterPreloader`：render 章節清單同落圖 **drainer 並行** — onPartial 一有 URL 入 DB
+  即刻 4 lane 出隊（實測 tap 章節→p1 到手 2.2 秒，22 頁話 6.95 秒入阅读開读）
+- `preflow(priorityPage=readPos)`：降落頁排 pending 隊最前（穩定排序，其餘升序照落）—
+  實測 217 頁話降落尾頁 **p217 全書第一**出隊；跨章回上一章即刻見到降落嗰頁
+
+### ↔️ 頭卡無縫回上一章（开发者：「滑動下一頁可以去下一章，滑動上一頁唔可以回上一章」）
+- 翻頁模式 index 0 = 真頁「頭卡」（← 上一章 · 標題）：喺第 1 頁再掃即無縫入上一章降落尾頁
+  （同尾卡向前對稱）；`pg != 0 先更新 prev` 防拖曳途中 (0,scrolling) 洗旗；
+  新章入場 `rememberPagerState(initialPage = 1)` 直接見第 1 頁唔困頭卡
+- 實機：265→掃→264 尾頁✓、24卷→掃→23卷 217/217 ✓
+
+### 🧭 底部 tab 必落根板（开发者：「書架按了就一定要到書架清單，不要逗留在章節」）
+- `App.kt` 刪官方 bottom-nav 模板嘅 saveState/restoreState（會連 detail/reader 堆疊 snapshot
+  一齊還原 → 逗留章節）；改純 `popUpTo(startDestination)` ＋ launchSingleTop — 書架/搜尋
+  兩條路徑實測均落根清單
+
+### 🛡 跨章保護閘加固（實測連環跳章 23→24→25卷附錄 根治，詳見 AGENTS.md 知識庫 #17）
+- **readPos=0 新章都要「定位→企穩→先清 switching 旗」**：pager 跨章瞬間仲 clamp 緊舊章
+  index，舊版第一幀清旗令尾卡/頭卡 auto 效果窗口期連環誤跳
+- **恢復等量程確立**：入章一刻 prog.total 未到手（量程 temporarily=已備頁數）會將尾頁
+  readPos clamp 去已備尾頁（216 降落 200）；只有 rendering=false 先准當「站點削頁」clamp
+- **補頁循環零 emit 修復**：pending 全部冇 url 時（殘行）由頭到尾冇 emit → prog 永停 0/0
+  副標題誤報「成話下載中 0/210」；每輪結尾強制 emit 真進度
+
+### 實機 E2E（8 吋 pad ＋ 真實站 `.fun`，一拳超人第23卷 217 頁 DB 手術可控場景）
+未備 17 頁→降落尾頁 217/217（p217 第一出隊）→ 未備 67 頁→滑杆拖入未備區即刻見
+「準備中 · 已備 210/217」佔位 → CDN 2 秒補齊即時變真圖 → 刪 7 頁觸發真站渲染修復 →
+尾卡顯示「下一章 · 第24卷（準備緊…）」候 nextReady 先放行 → 尾卡自動接 24卷後
+**15 秒零連跳** → 頭卡掃返 23卷 217/217；tab 根板、死章如實報錯 — 全部通過
+
+### 測試與構建
+`gradle testDebugUnitTest assembleDebug lintDebug` **BUILD SUCCESSFUL**；
+`versionName=0.3.1 / versionCode=4`；`dist/MangaCopy-android-v0.3.1-debug.apk`
+
 ## 2026-11-17 — 改進：MangaCopy Android v0.3.0（成話全量預載 ＋ 站點章節清單秒取 ＋ 防誤跳閘）
 
 ### ⚡ 章節清單秒取（WebViewRenderer，實測 224 頁章 20 秒攞齊）

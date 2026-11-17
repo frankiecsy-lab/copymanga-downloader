@@ -230,7 +230,7 @@ fun SettingsScreen() {
 
             SectionTitle("關於")
             Text(
-                "MangaCopy Android 0.3.0\n源碼同桌面版一庫：copymanga-downloader",
+                "MangaCopy Android 0.3.1\n源碼同桌面版一庫：copymanga-downloader",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
