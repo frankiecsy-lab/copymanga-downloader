@@ -22,6 +22,7 @@ import com.mangacopy.app.data.AppConfig
 import com.mangacopy.app.data.Backup
 import com.mangacopy.app.data.Db
 import com.mangacopy.app.data.Storage
+import com.mangacopy.app.data.UpdateChecker
 import com.mangacopy.app.download.DownloadEngine
 import com.mangacopy.app.download.RepoUpdater
 import com.mangacopy.app.source.SourceRegistry
@@ -59,6 +60,9 @@ fun SettingsScreen() {
     var keepOn by remember { mutableStateOf(ReaderPrefs.keepScreenOn(db)) }
     var usedBytes by remember { mutableStateOf(-1L) }
     val repoState by RepoUpdater.state.collectAsState()
+    // 手動檢查 GitHub 更新（用戶 2026-11-18：「設置中加一個更新GITHUB檢查」）
+    val updChecking by UpdateChecker.checking.collectAsState()
+    val updResult by UpdateChecker.result.collectAsState()
 
     // ---- 書架新章通知開關（用戶 2026-11-18）＋Android 13+ 權限請求 ----
     val context = LocalContext.current
@@ -349,6 +353,27 @@ fun SettingsScreen() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("檢查 GitHub 更新")
+                    Text("即時向 GitHub Releases 查最新 Android 版本" +
+                            "（啟動時已會自動查，12 小時節流；呢隻制繞過節流強制查一次）。" +
+                            "發現新版會彈窗帶下載連結。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Button(
+                    enabled = !updChecking,
+                    onClick = { UpdateChecker.checkNow() },
+                ) { Text(if (updChecking) "檢查中…" else "檢查") }
+            }
+            updResult?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall,
+                    color = if (it.startsWith("檢查失敗")) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp))
+            }
             Spacer(Modifier.height(24.dp))
         }
     }

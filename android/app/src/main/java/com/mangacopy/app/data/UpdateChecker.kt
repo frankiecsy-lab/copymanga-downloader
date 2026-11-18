@@ -36,6 +36,13 @@ object UpdateChecker {
     private val _state = MutableStateFlow<Available?>(null)
     val state: StateFlow<Available?> = _state
 
+    /** 設置頁手動檢查（用戶 2026-11-18：「設置中加一個更新 GITHUB 檢查」）：
+     *  checking＝按钮 spinner 狀態；result＝如實回報文字（最新/新版/失敗）。 */
+    private val _checking = MutableStateFlow(false)
+    val checking: StateFlow<Boolean> = _checking
+    private val _result = MutableStateFlow<String?>(null)
+    val result: StateFlow<String?> = _result
+
     private val http = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
@@ -44,37 +51,67 @@ object UpdateChecker {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val db get() = Db.get()
 
+    /** 打 GitHub API 攞最新 `android-vX.Y.Z` release；冇 / 失敗 → null。 */
+    private fun fetchLatest(): Pair<String, String>? {
+        val req = Request.Builder().url(API)
+            .header("User-Agent", "KIECOMIC")
+            .header("Accept", "application/vnd.github+json")
+            .build()
+        http.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return null
+            val arr = JSONArray(resp.body!!.string())
+            var ver = ""; var url = ""
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                if (o.optBoolean("draft") || o.optBoolean("prerelease")) continue
+                val tag = o.optString("tag_name")
+                if (!tag.startsWith("android-v")) continue
+                val v = tag.substring("android-v".length)
+                if (ver.isEmpty() || cmp(v, ver) > 0) { ver = v; url = o.optString("html_url") }
+            }
+            return if (ver.isEmpty()) null else ver to url
+        }
+    }
+
     /** App 啟動 effect 調用；background fire-and-forget，失敗靜默（唔滋擾用戶）。 */
     fun onAppStart() {
         val ts = db.getMeta(KV_TS, "0")?.toLongOrNull() ?: 0L
         if (System.currentTimeMillis() - ts < INTERVAL) { restoreFromCache(); return }
         scope.launch {
             try {
-                val req = Request.Builder().url(API)
-                    .header("User-Agent", "KIECOMIC")
-                    .header("Accept", "application/vnd.github+json")
-                    .build()
-                http.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) return@use
-                    val arr = JSONArray(resp.body!!.string())
-                    var ver = ""; var url = ""
-                    for (i in 0 until arr.length()) {
-                        val o = arr.optJSONObject(i) ?: continue
-                        if (o.optBoolean("draft") || o.optBoolean("prerelease")) continue
-                        val tag = o.optString("tag_name")
-                        if (!tag.startsWith("android-v")) continue
-                        val v = tag.substring("android-v".length)
-                        if (ver.isEmpty() || cmp(v, ver) > 0) { ver = v; url = o.optString("html_url") }
-                    }
-                    if (ver.isNotEmpty()) {
-                        db.setMeta(KV_TS, System.currentTimeMillis().toString())
-                        db.setMeta(KV_LATEST, "$ver|$url")
-                        if (cmp(ver, AppConfig.VERSION_NAME) > 0 && db.getMeta(KV_SEEN, "") != ver)
-                            _state.update { Available(ver, url) }
-                    }
-                }
+                val (ver, url) = fetchLatest() ?: return@launch
+                db.setMeta(KV_TS, System.currentTimeMillis().toString())
+                db.setMeta(KV_LATEST, "$ver|$url")
+                if (cmp(ver, AppConfig.VERSION_NAME) > 0 && db.getMeta(KV_SEEN, "") != ver)
+                    _state.update { Available(ver, url) }
             } catch (e: Exception) {
                 Log.w("MCUPD", "檢查更新失敗：${e.message}")
+            }
+        }
+    }
+
+    /** 設置頁「檢查」撳制：繞過 12 小時節流強制打 API，結果如實上報。
+     *  發現新版 → 清 upd_seen 強制彈 dialog（用戶 명시檢查，理应即刻見到入口）。 */
+    fun checkNow() {
+        if (_checking.value) return
+        _checking.value = true; _result.value = "連接 GitHub…"
+        scope.launch {
+            try {
+                val (ver, url) = fetchLatest() ?: error("GitHub 冇 Android 發行版")
+                db.setMeta(KV_TS, System.currentTimeMillis().toString())
+                db.setMeta(KV_LATEST, "$ver|$url")
+                if (cmp(ver, AppConfig.VERSION_NAME) > 0) {
+                    db.setMeta(KV_SEEN, "")
+                    _state.update { Available(ver, url) }
+                    _result.update { "發現新版本 v$ver — 彈窗已附下載連結" }
+                } else {
+                    _result.update { "已是最新版本 v${AppConfig.VERSION_NAME} ✔" }
+                }
+            } catch (e: Exception) {
+                Log.w("MCUPD", "手動檢查失敗：${e.message}")
+                _result.update { "檢查失敗：${e.message ?: "網絡錯誤"}" }
+            } finally {
+                _checking.value = false
             }
         }
     }

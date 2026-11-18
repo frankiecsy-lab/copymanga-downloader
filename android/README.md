@@ -5,7 +5,9 @@ Android APK：喺手機/平板 **搜尋瀏覽 → 收藏 → 下載 → 離線�
 **v0.3.2 起品牌統一為「KIECOMIC」**（launcher 名稱／icon／全局標題欄均係，
 LOGO 素材 `res/drawable-nodpi/kie_logo.png`）。
 
-## v0.3.4 第二版重點（2026-11-18 深夜，同版號迭代）
+## v0.3.5 重點（2026-11-18 深夜）
+
+- 版本 0.3.5（versionCode 8）— 以下全部功能最終定稿於此版號發佈
 
 - ♾️ **全站分批 LAZYLOAD 根治**：載入狀態機重做 — 單飛 `pageJob`（轉 filter 即 cancel 舊請求）
   ＋世代號防舊結果污染；`snapshotFlow` 主動預取（距底 10 格即拉下一頁）；被攔截 shell 頁
@@ -15,7 +17,8 @@ LOGO 素材 `res/drawable-nodpi/kie_logo.png`）。
 - 🗃 **設置「更新倉庫」**：全站清單快照（`repo` 表 runTs 蓋印制）只統計套數增減、
   `repo_run` kv 斷點續跑、完成摘要跨啟動重現
 - 🔄 **GitHub 檢查更新**：啟動查 Releases `android-vX.Y.Z`（12 小時節流＋kv 快取），
-  有新版彈一次 dialog → 瀏覽器開 Release 頁下載
+  有新版彈一次 dialog → 瀏覽器開 Release 頁下載；設置「關於」區另設**手動「檢查」制**
+  （繞過節流強制查＋即時回報「已是最新版本／發現新版／失敗」）
 - 🔔 **書架新章系統通知**：ListUpdater 發現新章 → Android 通知（channel 書架新章節；
   設置頁開關 kv `notify_ch` 默認開；Android 13+ POST_NOTIFICATIONS 運行時授權）
 - 💾 **備份匯出／匯入**：SAF JSON（用戶設置白名單＋書架全行），換機秒搬；圖片唔納入
