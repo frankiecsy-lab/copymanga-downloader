@@ -5,6 +5,16 @@ Android APK：喺手機/平板 **搜尋瀏覽 → 收藏 → 下載 → 離線�
 **v0.3.2 起品牌統一為「KIECOMIC」**（launcher 名稱／icon／全局標題欄均係，
 LOGO 素材 `res/drawable-nodpi/kie_logo.png`）。
 
+## v0.3.6 重點（2026-11-18 深夜二）
+
+- ⬇️ **更新 App 內直接下載安裝**（用戶：「更新不想跳轉，想它直接下載APK自動打開」）：
+  發現新版彈窗 → OkHttp 落 `.apk` 直鏈（GitHub Release assets）去 app 專屬 `updates/` 目錄
+  → 完成**自動開啟系統安裝界面**（FileProvider content URI＋`package-archive` MIME）；
+  欠「安裝未知應用」授權走 NeedPerm 授權頁流程（檔已落盤，授權返嚟撳多一次即裝）；
+  下載中彈窗顯示實時 MB／百分比且唔容誤關
+- 快取 kv 升三段式 `ver|頁url|APK直鏈`（舊格式自動補刷）；APK 下載獨立 OkHttp 客戶端
+- 版本 0.3.6（versionCode 9）
+
 ## v0.3.5 重點（2026-11-18 深夜）
 
 - 版本 0.3.5（versionCode 8）— 以下全部功能最終定稿於此版號發佈

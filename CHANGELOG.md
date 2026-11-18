@@ -1,5 +1,28 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-18 — 改進：KIECOMIC Android v0.3.6（更新彈窗 App 內直接下載 APK＋自動開啟安裝）
+
+用戶：「更新不想跳轉，想它直接下載APK自動打開」— 更新流程由「開瀏覽器去 Release 頁」改成全內置：
+
+### ⬇️ 發現新版 → 彈窗直接下載安裝（唔再跳瀏覽器）
+- `fetchLatest()` 由 GitHub Release **assets 攞 `.apk` 直鏈**（`browser_download_url`，首選含
+  debug 嗰個；冇 apk 嘅 release 直接跳過）；快取 kv 升三段式 `ver|頁url|APK直鏈`，
+  讀到舊兩段式快取會自動後台補刷一次（升級銜接唔會死喺度）
+- 新下載狀態機 `UpdateChecker.Download`：Idle → Running(read/total，每 256KB 節流 emit 進度)
+  → **Ready（完成即自動 startActivity 開系統安裝界面）**／NeedPerm／Fail
+- APK 落 `getExternalFilesDir(null)/updates/KIECOMIC-android-vX.Y.Z.apk`
+  （app 專屬目錄：零 storage 權限、卸載即清）；先落 `download.part` 再 rename（防半檔）
+- Android 7+ 禁 file:// 跨進程 → **FileProvider**（`${applicationId}.fileprovider`，
+  只暴露 `updates/` 一個目錄）＋ `ACTION_VIEW` + `application/vnd.android.package-archive`
+  ＋ `FLAG_GRANT_READ_URI_PERMISSION`
+- Android 8+「安裝未知應用程式」特殊權限：Manifest 聲明 `REQUEST_INSTALL_PACKAGES` ＋
+  運行時 `canRequestPackageInstalls()` 檢查 — 未授權**唔會白嘔完成先失敗**：檔照落盤轉
+  NeedPerm，彈窗变「去授權」→ `ACTION_MANAGE_UNKNOWN_APP_SOURCES` 授權頁，返嚟撳多一次即裝
+- 彈窗按鈕跟狀態走：直接下載安裝／下載中…(45%)／去授權／立即安裝／重試下載；
+  下載中唔容關閉（防誤觸）；APK 下載用獨立 OkHttp（冇 20s callTimeout，慢網都落得完）
+- 實機 E2E（pad 全真實鏈路）：改裝「假舊版」觸發彈窗 → 直接下載 → 授權流程 →
+  系統安裝器自動彈出 → 裝完 `versionName=0.3.6` ✓
+
 ## 2026-11-18 — 改進＋修復：KIECOMIC Android v0.3.5（全站 LAZYLOAD 根治 ＋ 倉庫 ＋ 通知 ＋ 備份 ＋ GitHub 檢查更新）
 
 深夜批次最終定稿 v0.3.5（用戶：「看到了，V0.3.5 UPDATE」；中途曾以 0.3.4 同版號迭代發佈過一次）：

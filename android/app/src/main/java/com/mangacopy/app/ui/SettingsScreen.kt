@@ -359,7 +359,7 @@ fun SettingsScreen() {
                     Text("檢查 GitHub 更新")
                     Text("即時向 GitHub Releases 查最新 Android 版本" +
                             "（啟動時已會自動查，12 小時節流；呢隻制繞過節流強制查一次）。" +
-                            "發現新版會彈窗帶下載連結。",
+                            "發現新版會彈窗直接喺 App 內下載 APK 並自動開啟安裝。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 書架新章系統通知（Android 13+ 運行時授權；設置頁開關撳制時請求） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 更新彈窗 App 內直接安裝 APK（v0.3.6）：Android 8+ 屬「特殊權限」，
+         聲明後仍要用戶去設置授權（canRequestPackageInstalls 運行時檢查） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".MangaCopyApp"
@@ -26,5 +29,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 更新 APK 交畀系統安裝器嘅 content URI 出口（Android 7+ 禁 file://）；
+             exported=false ＋ 一次性讀授權（FLAG_GRANT_READ_URI_PERMISSION） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

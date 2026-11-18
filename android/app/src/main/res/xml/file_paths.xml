@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 暴露範圍（v0.3.6 更新彈窗直接下載安裝用）：
+     只准 external-files-path 下 updates/ 一個子目錄 — 下載嘅 APK 交畀系統安裝器，
+     其他目錄（downloads 漫畫內容等）一律唔暴露。 -->
+<paths>
+    <external-files-path name="updates" path="updates/" />
+</paths>

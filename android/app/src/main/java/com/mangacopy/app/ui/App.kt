@@ -1,7 +1,5 @@
 package com.mangacopy.app.ui
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -196,27 +194,55 @@ fun App() {
     }
 
     // GitHub 新版本 dialog（用戶 2026-11-18：「有更新要在打開APP時提醒一次」）—
-    // acknowledge() 記低已確認版本，同一版號只彈一次；「去下載」開瀏覽器 Release 頁
+    // acknowledge() 記低已確認版本，同一版號只彈一次。
+    // v0.3.6 起「直接下載安裝」（用戶：「更新不想跳轉，想它直接下載APK自動打開」）：
+    // App 內 OkHttp 落 APK → 完成自動開系統安裝界面；欠授權走 NeedPerm 授權流程。
+    val dl by UpdateChecker.download.collectAsState()
     update?.let { u ->
+        val running = dl is UpdateChecker.Download.Running
         AlertDialog(
-            onDismissRequest = { UpdateChecker.acknowledge() },
+            onDismissRequest = { if (!running) UpdateChecker.acknowledge() },
             title = { Text("發現新版本 v${u.version}") },
             text = {
-                Text("當前 v${AppConfig.VERSION_NAME} → 最新 v${u.version}。\n" +
-                    "撳「去下載」用瀏覽器開啟 GitHub Release 頁面下載新 APK。")
+                Text(when (val d = dl) {
+                    UpdateChecker.Download.Idle ->
+                        "當前 v${AppConfig.VERSION_NAME} → 最新 v${u.version}。\n" +
+                        "撳「直接下載安裝」即刻喺 App 內下載新 APK，完成後自動開啟安裝界面。"
+                    is UpdateChecker.Download.Running ->
+                        if (d.total > 0)
+                            "下載中 ${"%.1f".format(d.read / 1e6)} / ${"%.1f".format(d.total / 1e6)} MB" +
+                                "（${(d.read * 100 / d.total)}%）"
+                        else "下載中 ${"%.1f".format(d.read / 1e6)} MB…"
+                    is UpdateChecker.Download.Ready ->
+                        "下載完成 ✅ 系統安裝界面已開啟 — 撳「安裝」完成升級，App 會自動重啟。"
+                    is UpdateChecker.Download.NeedPerm ->
+                        "APK 已下載完成。安裝需要授權 KIECOMIC「安裝未知應用程式」— " +
+                        "撳「去授權」允許後，返嚟再撳一次即裝。"
+                    is UpdateChecker.Download.Fail ->
+                        "下載失敗：${d.msg}\n撳「重試下載」再試一次。"
+                })
             },
             confirmButton = {
-                TextButton(onClick = {
-                    runCatching {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(u.url))
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                    }
-                    UpdateChecker.acknowledge()
-                }) { Text("去下載") }
+                TextButton(
+                    enabled = !running,
+                    onClick = {
+                        when (dl) {
+                            is UpdateChecker.Download.NeedPerm,
+                            is UpdateChecker.Download.Ready -> UpdateChecker.retryInstall(context)
+                            else -> UpdateChecker.startDownload(context)
+                        }
+                    },
+                ) { Text(when (dl) {
+                    is UpdateChecker.Download.Running -> "下載中…"
+                    is UpdateChecker.Download.NeedPerm -> "去授權"
+                    is UpdateChecker.Download.Ready -> "立即安裝"
+                    is UpdateChecker.Download.Fail -> "重試下載"
+                    else -> "直接下載安裝"
+                }) }
             },
             dismissButton = {
-                TextButton(onClick = { UpdateChecker.acknowledge() }) { Text("知道") }
+                TextButton(enabled = !running,
+                    onClick = { UpdateChecker.acknowledge() }) { Text("知道") }
             },
         )
     }
