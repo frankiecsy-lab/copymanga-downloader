@@ -62,7 +62,9 @@ import kotlin.math.roundToInt
  * 全屏隱系統欄 + 可選保持螢幕開啟；點擊左右 1/3 翻頁、中間出工具欄。
  */
 @Composable
-fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
+fun ReaderScreen(slug: String, cid: String, land: Int? = null, onBack: () -> Unit) {
+    // v0.3.7 land（用戶：「從頭睇就一定要第一章第一頁」）：開章降落頁 override
+    // （0=第 1 頁）；null = 照常還原該章 readPos。跨章 gotoChapter 另有自己嘅 land。
     val db = remember { Db.get() }
     val comic = remember(slug) { db.getComic(slug) }
     // 2026-11-17 實測：站序（flow）係最新排最前 → 一拳「第17卷」嘅 flow「下一章」
@@ -108,8 +110,11 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
         prog = ChapterPreloader.Prog(true, 0, 0)
         imgTick++
         // 降落頁（readPos 恢復目標）優先落盤 — 用戶：「上咗尾頁，先讀到尾頁
-        // 出來先至自動下載其他頁數」；無 readPos 嘅新章 = 第 1 頁，行為不變
-        ChapterPreloader.preflow(slug, currentCid, db.readPos(slug, currentCid))
+        // 出來先至自動下載其他頁數」；無 readPos 嘅新章 = 第 1 頁，行為不變；
+        // 入場帶 land（從頭睇=0）→ 降落頁以 land 為準，唔好白 prioritize 舊 readPos
+        val prio = if (currentCid == cid) land ?: db.readPos(slug, currentCid)
+                   else db.readPos(slug, currentCid)
+        ChapterPreloader.preflow(slug, currentCid, prio)
             .collect { p -> prog = p; imgTick++ }
     }
 
@@ -190,7 +195,7 @@ fun ReaderScreen(slug: String, cid: String, onBack: () -> Unit) {
     // 最後一頁下一頁必須去下一章第一頁」）— null＝還原該章儲存進度（只限由詳情頁
     // 手動開章）；0＝著陸第 1 頁；Int.MAX_VALUE＝著陸尾頁（restore 邏輯等量程尘埃
     // 落定先跳 totalPages-1，未齊頁期間 switching 屏蔽旗照樣壓住 auto 跳章）
-    var landOverride by remember { mutableStateOf<Int?>(null) }
+    var landOverride by remember { mutableStateOf(land) }
     val pendingRestore = remember(currentCid, mode) { landOverride ?: db.readPos(slug, currentCid) }
     // 落尾頁著陸（向後跨章）→ 暫壓流水 footer 自動接下一章：13/13 著陸瞬間 footer
     // （idx=totalPages）可能就喺 viewport 內，auto-advance 照 firing 會即刻掟返去

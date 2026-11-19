@@ -5,6 +5,19 @@ Android APK：喺手機/平板 **搜尋瀏覽 → 收藏 → 下載 → 離線�
 **v0.3.2 起品牌統一為「KIECOMIC」**（launcher 名稱／icon／全局標題欄均係，
 LOGO 素材 `res/drawable-nodpi/kie_logo.png`）。
 
+## v0.3.7 重點（2026-11-20）
+
+- 📖 **章節清單離線秒出＋入頁必更新**：有 DB 快取即顯示（唔使等網絡），其後**每次**入頁
+  背景 diff 新章（撤 15 分鐘過期閘）；「新增 N 章」提示掛「章節 x/y」行右邊
+- 🗂 **卷 TAB 過濾**：有分卷嘅書頂部出 FilterChip 列（全書／第N卷／話，帶章數、可橫滚）—
+  `ChapterGroups.volumeOf` 抽「第N卷」（附錄歸卷、中文數字）、單話歸「話」tab；
+  批量「全選」只揀當前 tab 所見
+- 🔝 **從頭睇一定第一章第 1 頁**：路由 `?land=0` → ReaderScreen land override，
+  唔再還原舊 readPos
+- 🔄 **設置「旋轉鎖定」**：kv 持久（lock＋方向），即時凍結目前方向、重開 App 照保持；
+  橫式用 SENSOR_LANDSCAPE；已入備份白名單
+- 版本 0.3.7（versionCode 10）
+
 ## v0.3.6 重點（2026-11-18 深夜二）
 
 - ⬇️ **更新 App 內直接下載安裝**（用戶：「更新不想跳轉，想它直接下載APK自動打開」）：

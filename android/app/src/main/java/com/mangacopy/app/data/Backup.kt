@@ -21,6 +21,7 @@ object Backup {
     val SETTING_KEYS = listOf(
         "read_mode", "read_rtl", "read_spread", "read_keep_screen_on", "read_immersive",
         "list_mode", "ui_theme", "notify_ch",
+        "rotation_lock", "rotation_lock_dir",   // v0.3.7 旋轉鎖定（方向都要跟備份走）
     )
 
     fun exportJson(db: Db): String {

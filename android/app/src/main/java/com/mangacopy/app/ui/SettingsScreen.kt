@@ -16,8 +16,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.mangacopy.app.MainActivity
 import com.mangacopy.app.data.AppConfig
 import com.mangacopy.app.data.Backup
 import com.mangacopy.app.data.Db
@@ -174,6 +176,32 @@ fun SettingsScreen() {
                             ) { Text(label, maxLines = 1) }
                         }
                 }
+            }
+
+            // v0.3.7 旋轉鎖定（用戶：「加一個旋轉鎖定可保持的設置」）—
+            // 開關即時凍結**目前**方向＋kv 記低方向；重開 App（MainActivity.applyRotationLock）
+            // 照鎖。橫式用 SENSOR_LANDSCAPE：橫住翻轉 180° 都唔會跌返直式。
+            val view = LocalView.current
+            var rotLock by remember { mutableStateOf(db.getMeta("rotation_lock", "false") == "true") }
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("旋轉鎖定")
+                    Text("凍結畫面喺而家嘅方向（直式／橫式），重開 App 仍然保持 —" +
+                            "橫屏睇漫最啱用；關閉即回復自由旋轉",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(
+                    checked = rotLock,
+                    onCheckedChange = {
+                        rotLock = it
+                        db.setMeta("rotation_lock", if (it) "true" else "false")
+                        if (it) db.setMeta("rotation_lock_dir",
+                            view.resources.configuration.orientation.toString())
+                        (view.context as? MainActivity)?.applyRotationLock()
+                    },
+                )
             }
 
             SectionTitle("倉庫")

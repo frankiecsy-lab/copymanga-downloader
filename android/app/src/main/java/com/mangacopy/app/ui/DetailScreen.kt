@@ -3,7 +3,9 @@ package com.mangacopy.app.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -27,6 +29,7 @@ import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.mangacopy.app.data.Db
 import com.mangacopy.app.download.DownloadEngine
+import com.mangacopy.app.source.ChapterGroups
 import com.mangacopy.app.source.SourceRegistry
 
 /**
@@ -66,15 +69,15 @@ fun DetailScreen(nav: NavHostController, slug: String) {
     // 瀏覽紀錄（入頁即記，重訪更新時間）
     LaunchedEffect(slug) { db.recordHistory(slug) }
 
-    // 緩存優先 ＋ 背景更新（用戶要求）：DB 有清單即顯示離線紀錄；
-    // 距上次渲染超過 15 分鐘（或手動「更新章節」/重試）先再 renderDetail diff 新章節。
-    // 連結（章節 url／圖片 url）本身就持久喺 DB = 下次下載唔使重新搵連結。
+    // v0.3.7（用戶：「章節清單要離線保存，進入更新，但要先把離線的讀出來」）：
+    // 入頁 **永遠**即刻顯示 DB 離線清單（loadingChapters 只喺真・空清單時先全屏轉圈），
+    // 然後 **每次入頁**都背景 renderDetail diff 新章（撤走舊 15 分鐘過期閘）；
+    // 連結（章節 url／圖片 url）持久喺 DB = 下次下載/閱讀唔使重新搵連結。
     LaunchedEffect(slug, retryTick, refreshTick) {
         if (DownloadEngine.state.value.running) return@LaunchedEffect
-        val lastTs = db.getMeta("chlist_ts:$slug", "0")?.toLongOrNull() ?: 0L
-        val stale = System.currentTimeMillis() - lastTs > 15 * 60_000L
-        if (chapters.isNotEmpty() && !stale && refreshTick == 0 && retryTick == 0) return@LaunchedEffect
-        loadingChapters = chapters.isEmpty()   // 有舊清單就唔好全屏幕「載入中」阻閱讀
+        val manual = refreshTick > 0
+        if (manual) refreshMsg = null
+        loadingChapters = chapters.isEmpty()
         refreshing = chapters.isNotEmpty()
         loadErr = null
         try {
@@ -85,13 +88,13 @@ fun DetailScreen(nav: NavHostController, slug: String) {
             val added = db.allChapters(slug, "flow").size - before
             db.setMeta("chlist_ts:$slug", System.currentTimeMillis().toString())
             if (added > 0) refreshMsg = "新增 $added 章"
-            else if (refreshTick > 0) refreshMsg = "已經係最新清單"
+            else if (manual) refreshMsg = "已經係最新清單"
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e   // 正常取消（離開頁面）→ 唔好寫入「更新失敗」假訊息
         } catch (e: Exception) {
             // 有舊清單就靜默失敗（唔阻離線閱讀）；空清單先報錯俾重試
             if (chapters.isEmpty()) loadErr = e.message
-            else if (refreshTick > 0) refreshMsg = "更新失敗：${e.message}"
+            else if (manual) refreshMsg = "更新失敗：${e.message}"
         }
         comic = db.getComic(slug)
         chapters = db.allChapters(slug, orderOf(sort))
@@ -111,6 +114,34 @@ fun DetailScreen(nav: NavHostController, slug: String) {
         chapters = db.allChapters(slug, orderOf(sort))
     }
 
+    // v0.3.7 卷 TAB（用戶：「如果有分『卷』或者『話』，上方一個TAB切換FILTER」）：
+    // 標題抽到卷數（第N卷／第N卷附錄+番外 都歸該卷）就出 tab 列；全書得一種
+    // （冇卷／全部散落單話）→ 唔出 tab。「話」tab = 冇卷概念嘅單話（第405話呢類）。
+    // 提到 Scaffold 之上：topBar「全選」都要用當可見清單（卷 filter 中只揀所見）。
+    val volTabs = remember(chapters) {
+        val vols = chapters.mapNotNull { ChapterGroups.volumeOf(it.title) }
+            .distinct().sorted()
+        val hasLoose = chapters.any { ChapterGroups.volumeOf(it.title) == null }
+        if (vols.size + (if (hasLoose) 1 else 0) < 2) emptyList()
+        else vols.map { v -> Triple("v$v", "第${v}卷",
+                    chapters.count { ChapterGroups.volumeOf(it.title) == v }) } +
+            (if (hasLoose) listOf(Triple("loose", "話",
+                    chapters.count { ChapterGroups.volumeOf(it.title) == null }))
+             else emptyList())
+    }
+    var volSel by remember(slug) { mutableStateOf<String?>(null) }
+    val shown = remember(chapters, volSel, volTabs) {
+        val sel = volSel   // delegated property 冇 smart cast，capture 落 local
+        when {
+            volTabs.isEmpty() || sel == null -> chapters
+            sel == "loose" -> chapters.filter { ChapterGroups.volumeOf(it.title) == null }
+            else -> {
+                val v = sel.drop(1).toIntOrNull()
+                chapters.filter { ChapterGroups.volumeOf(it.title) == v }
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             if (selectMode) {
@@ -122,8 +153,9 @@ fun DetailScreen(nav: NavHostController, slug: String) {
                         }
                     },
                     actions = {
-                        TextButton(onClick = { selected = chapters.map { it.chapterId }.toSet() }) {
-                            Text("全選(${chapters.size})")
+                        // 全選只揀當前卷 tab 可見嘅章（v0.3.7 卷 filter 生效中）
+                        TextButton(onClick = { selected = shown.map { it.chapterId }.toSet() }) {
+                            Text("全選(${shown.size})")
                         }
                         TextButton(onClick = { selected = emptySet() }) { Text("清単") }
                     },
@@ -231,17 +263,29 @@ fun DetailScreen(nav: NavHostController, slug: String) {
                     }
                     Spacer(Modifier.height(6.dp))
                     val prog = db.comicProgress(slug)
-                    Text(
-                        when {
-                            loadingChapters -> "載入章節清單中…"
-                            prog.chTotal > 0 -> "章節 ${prog.chDone}/${prog.chTotal}" +
-                                    if (prog.chErr > 0) "（${prog.chErr} 章出錯）" else ""
-                            else -> "未有章節資料"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (prog.chErr > 0) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    // v0.3.7（用戶：「新增多少章的文字，放到如章節1/129 右邊」）—
+                    // 更新結果（新增 N 章／已最新／失敗）同進度行掛同一行右側
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            when {
+                                loadingChapters -> "載入章節清單中…"
+                                prog.chTotal > 0 -> "章節 ${prog.chDone}/${prog.chTotal}" +
+                                        if (prog.chErr > 0) "（${prog.chErr} 章出錯）" else ""
+                                else -> "未有章節資料"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (prog.chErr > 0) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        refreshMsg?.let {
+                            Spacer(Modifier.width(8.dp))
+                            Text(it, style = MaterialTheme.typography.labelSmall,
+                                color = if (it.startsWith("更新失敗"))
+                                    MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.primary,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
                     Spacer(Modifier.height(8.dp))
                     // 主按鈕（用戶要求）：未睇過 = 第一章開始；睇過 = 繼續閱讀上次嗰章
                     val seenCid = lastCid?.takeIf { id -> chapters.any { it.chapterId == id } }
@@ -265,18 +309,14 @@ fun DetailScreen(nav: NavHostController, slug: String) {
                             )
                         }
                         // 「更新章節」已移去頂欄 Refresh icon（用戶 2026-11-17）
-                        // 2026-11-17 用戶要求：「從頭睇」— 永遠跳數字第一話（第01話/第01卷）
+                        // v0.3.7（用戶：「從頭睇就一定要第一章第一頁」）— land=0 強制降落
+                        // 第 1 頁，唔再還原呢章舊 readPos（舊版重睇第一章會返去以前睇開嗰頁）
                         if (seenCid != null) {
                             OutlinedButton(
                                 enabled = firstCid != null,
-                                onClick = { firstCid?.let { nav.navigate("reader/$slug/$it") } },
+                                onClick = { firstCid?.let { nav.navigate("reader/$slug/$it?land=0") } },
                             ) { Text("從頭睇") }
                         }
-                    }
-                    refreshMsg?.let {
-                        Text(it, style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -294,6 +334,28 @@ fun DetailScreen(nav: NavHostController, slug: String) {
 
             HorizontalDivider(Modifier.padding(top = 4.dp))
             // 章節排序 chips 已移去頂欄 Sort icon 嘅 DropdownMenu（用戶 2026-11-17）
+
+            // 卷 TAB 列（volTabs/shown 定義喺 Scaffold 之上 — topBar 全選都要用）
+            if (volTabs.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = volSel == null,
+                        onClick = { volSel = null },
+                        label = { Text("全書 ${chapters.size}") },
+                    )
+                    volTabs.forEach { (key, label, n) ->
+                        FilterChip(
+                            selected = volSel == key,
+                            onClick = { volSel = if (volSel == key) null else key },
+                            label = { Text("$label $n") },
+                        )
+                    }
+                }
+            }
 
             if (loadingChapters) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -324,7 +386,7 @@ fun DetailScreen(nav: NavHostController, slug: String) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                items(chapters, key = { it.chapterId }) { ch ->
+                items(shown, key = { it.chapterId }) { ch ->
                     val isSel = ch.chapterId in selected
                     ChapterGridButton(
                         title = ch.title ?: "章節",

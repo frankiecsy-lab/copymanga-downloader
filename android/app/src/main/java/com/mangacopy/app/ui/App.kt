@@ -36,6 +36,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -129,10 +131,20 @@ fun App() {
             composable("detail/{slug}") { entry ->
                 DetailScreen(nav, entry.arguments?.getString("slug") ?: "")
             }
-            composable("reader/{slug}/{cid}") { entry ->
+            // land（v0.3.7）：可選降落頁 query（?land=0 = 從頭睇強制第 1 頁；
+            // 冇 query 嘅舊導航照樣匹配 → 照常還原 readPos）
+            composable(
+                "reader/{slug}/{cid}?land={land}",
+                arguments = listOf(
+                    navArgument("land") {
+                        type = NavType.StringType; nullable = true; defaultValue = null
+                    },
+                ),
+            ) { entry ->
                 ReaderScreen(
                     slug = entry.arguments?.getString("slug") ?: "",
                     cid = entry.arguments?.getString("cid") ?: "",
+                    land = entry.arguments?.getString("land")?.toIntOrNull(),
                     onBack = { nav.popBackStack() },
                 )
             }
