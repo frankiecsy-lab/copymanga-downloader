@@ -3,9 +3,7 @@ package com.mangacopy.app.ui
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -29,7 +27,6 @@ import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.mangacopy.app.data.Db
 import com.mangacopy.app.download.DownloadEngine
-import com.mangacopy.app.source.ChapterGroups
 import com.mangacopy.app.source.SourceRegistry
 
 /**
@@ -114,34 +111,6 @@ fun DetailScreen(nav: NavHostController, slug: String) {
         chapters = db.allChapters(slug, orderOf(sort))
     }
 
-    // v0.3.7 卷 TAB（用戶：「如果有分『卷』或者『話』，上方一個TAB切換FILTER」）：
-    // 標題抽到卷數（第N卷／第N卷附錄+番外 都歸該卷）就出 tab 列；全書得一種
-    // （冇卷／全部散落單話）→ 唔出 tab。「話」tab = 冇卷概念嘅單話（第405話呢類）。
-    // 提到 Scaffold 之上：topBar「全選」都要用當可見清單（卷 filter 中只揀所見）。
-    val volTabs = remember(chapters) {
-        val vols = chapters.mapNotNull { ChapterGroups.volumeOf(it.title) }
-            .distinct().sorted()
-        val hasLoose = chapters.any { ChapterGroups.volumeOf(it.title) == null }
-        if (vols.size + (if (hasLoose) 1 else 0) < 2) emptyList()
-        else vols.map { v -> Triple("v$v", "第${v}卷",
-                    chapters.count { ChapterGroups.volumeOf(it.title) == v }) } +
-            (if (hasLoose) listOf(Triple("loose", "話",
-                    chapters.count { ChapterGroups.volumeOf(it.title) == null }))
-             else emptyList())
-    }
-    var volSel by remember(slug) { mutableStateOf<String?>(null) }
-    val shown = remember(chapters, volSel, volTabs) {
-        val sel = volSel   // delegated property 冇 smart cast，capture 落 local
-        when {
-            volTabs.isEmpty() || sel == null -> chapters
-            sel == "loose" -> chapters.filter { ChapterGroups.volumeOf(it.title) == null }
-            else -> {
-                val v = sel.drop(1).toIntOrNull()
-                chapters.filter { ChapterGroups.volumeOf(it.title) == v }
-            }
-        }
-    }
-
     Scaffold(
         topBar = {
             if (selectMode) {
@@ -153,9 +122,8 @@ fun DetailScreen(nav: NavHostController, slug: String) {
                         }
                     },
                     actions = {
-                        // 全選只揀當前卷 tab 可見嘅章（v0.3.7 卷 filter 生效中）
-                        TextButton(onClick = { selected = shown.map { it.chapterId }.toSet() }) {
-                            Text("全選(${shown.size})")
+                        TextButton(onClick = { selected = chapters.map { it.chapterId }.toSet() }) {
+                            Text("全選(${chapters.size})")
                         }
                         TextButton(onClick = { selected = emptySet() }) { Text("清単") }
                     },
@@ -335,28 +303,6 @@ fun DetailScreen(nav: NavHostController, slug: String) {
             HorizontalDivider(Modifier.padding(top = 4.dp))
             // 章節排序 chips 已移去頂欄 Sort icon 嘅 DropdownMenu（用戶 2026-11-17）
 
-            // 卷 TAB 列（volTabs/shown 定義喺 Scaffold 之上 — topBar 全選都要用）
-            if (volTabs.isNotEmpty()) {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilterChip(
-                        selected = volSel == null,
-                        onClick = { volSel = null },
-                        label = { Text("全書 ${chapters.size}") },
-                    )
-                    volTabs.forEach { (key, label, n) ->
-                        FilterChip(
-                            selected = volSel == key,
-                            onClick = { volSel = if (volSel == key) null else key },
-                            label = { Text("$label $n") },
-                        )
-                    }
-                }
-            }
-
             if (loadingChapters) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -386,7 +332,7 @@ fun DetailScreen(nav: NavHostController, slug: String) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                items(shown, key = { it.chapterId }) { ch ->
+                items(chapters, key = { it.chapterId }) { ch ->
                     val isSel = ch.chapterId in selected
                     ChapterGridButton(
                         title = ch.title ?: "章節",

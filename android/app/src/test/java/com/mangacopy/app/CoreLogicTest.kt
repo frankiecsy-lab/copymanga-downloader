@@ -111,23 +111,6 @@ class CoreLogicTest {
         assertTrue(com.mangacopy.app.data.UpdateChecker.cmp("0.3.4.1", "0.3.4") > 0)  // 多一段視為更新
     }
 
-    // ---------- 卷 TAB 分組（v0.3.7 詳情頁卷過濾用） ----------
-
-    @Test
-    fun `體積分組 - 卷數擷取（阿拉伯＋中文數字）`() {
-        val v = com.mangacopy.app.source.ChapterGroups::volumeOf
-        assertEquals(17, v("第17卷"))
-        assertEquals(22, v("第22卷附錄+番外"))          // 附錄歸所属卷
-        assertEquals(3, v("第 3 卷 起點"))              // 有空格都認
-        assertNull(v("第405话 激突"))                    // 單話冇卷
-        assertNull(v("番外：某日的故事"))
-        assertNull(v(null))
-        assertEquals(11, com.mangacopy.app.source.ChapterGroups.cjkToInt("十一"))
-        assertEquals(23, com.mangacopy.app.source.ChapterGroups.cjkToInt("二十三"))
-        assertEquals(105, com.mangacopy.app.source.ChapterGroups.cjkToInt("一百五"))
-        assertEquals(113, com.mangacopy.app.source.ChapterGroups.cjkToInt("一百一十三"))
-    }
-
     private fun escapeAttr(s: String) =
         s.replace("&", "&amp;").replace("\"", "&quot;")
 }

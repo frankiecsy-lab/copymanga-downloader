@@ -1,5 +1,15 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-20 — 改進：KIECOMIC Android v0.3.8（撤銷卷 TAB 過濾 — 用戶取消需求）
+
+用戶：「如果有分卷或者話，上方一個TAB切換FILTER — 以上取消」。v0.3.7 已上線嘅卷 TAB
+功能全數撤回：
+
+- 移除 `ChapterGroups.kt`（卷數擷取）＋其單元測試＋詳情頁 volTabs/volSel/shown 過濾機制
+  與 FilterChip TAB 列；章節清單同批量「全選」返直接用全量 `chapters`
+- 其餘 v0.3.7 功能（離線秒出／從頭睇第 1 頁／旋轉鎖定／新增章提示移位）**全部保留不動**
+- 版本 0.3.8（versionCode 11）
+
 ## 2026-11-20 — 改進：KIECOMIC Android v0.3.7（清單離線秒出＋卷 TAB＋從頭睇第一頁＋旋轉鎖定＋新增章提示移位）
 
 用戶五項批次（「0.3.7 build release」）：
