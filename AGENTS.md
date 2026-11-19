@@ -195,4 +195,12 @@
 * **【正確資源】**：[FileProvider 文檔](https://developer.android.com/reference/androidx/core/content/FileProvider)（`external-files-path` 暴露 app 專屬目錄＋`FLAG_GRANT_READ_URI_PERMISSION`）；`ACTION_VIEW`＋`application/vnd.android.package-archive`＋content URI 係最通用安装写法（比 ACTION_INSTALL_PACKAGE 穩）。
 * **【解決/避坑方案】**（已寫入 `UpdateChecker.kt`/`App.kt`/Manifest，pad 0.3.5→0.3.6 實裝回归）：① 狀態機 Idle→Running(256KB 節流 emit)→**Ready（自動開安裝界面）**／NeedPerm／Fail，下載中彈窗唔容關閉；② **NeedPerm 設計要訣：檔照落盤先**，授權返嚟撳多一次即裝（唔會下載完先失敗）；③ APK 先落 `download.part` 再 rename 防半檔；存 `getExternalFilesDir(null)/updates/`＋FileProvider `file_paths.xml` 只暴露呢一個目錄；④ APK 用獨立 OkHttp 客戶端（唔食 API 份 20s callTimeout）；⑤ kv 快取升三段式 `ver|頁url|APK直鏈`，讀到舊兩段式自動後台補刷。測試方法論：temporarily 改低 versionName/versionCode 出「假舊版」裝機觸發彈窗，行完真實升級鏈（`git checkout --` 還原版號檔）。
 
+#### 29. Kotlin 字串模板跟中文 ＋ by remember delegate 冇 smart cast（v0.3.7 構建教訓）
+* **【問題/限制】**：① 中文字係 **合法 Kotlin identifier 字符** — `"第$v卷"` 被 parser 當變數名 `v卷` → `Unresolved reference 'v卷'`，睇落個變數明明存在，極易撳錯方向；② `var x by remember { mutableStateOf<String?>(null) }` 呢類 **delegated property 一律唔俾 smart cast** — `when` 分支確認過 `x != null` 之後再用 `x.drop(1)` 照樣報 `Smart cast is impossible, because 'x' is a delegated property`。
+* **【解決/避坑方案】**：① 模板內跟中文字嘅插值一律寫 `"${v}"`；② delegate var 要智能用就先 capture 落局部 `val sel = x` 再操作。兩條都係 compile-time 即爆，構建三件套係防線。
+
+#### 30. adb shell cat 拉 binary DB 會 CRLF 弄爛 — 必須 exec-out（#10⑤ 補充）
+* **【問題/限制】**：`adb shell run-as pkg cat databases/x.db > local.db` 經 shell 層做 LF→CRLF 轉換，SQLite/WAL 係 binary → pull 返嚟 `sqlite3` 直接 `database disk image is malformed`，誤判做 DB 壞咗。
+* **【解決/避坑方案】**：Pull 任何 binary（DB/WAL/APK）一律 `adb exec-out run-as pkg cat <path>`（raw 模式唔郁字節）；验證 App 內 kv 落盤用「exec-out pull 主檔＋-wal 落同目錄 → Python sqlite3 開主檔（自動合併 WAL）」標準組合。
+
 *(此處留空，供 AI 在後續開發中自動填入發現的頻率限制、新官方文檔網址等珍貴經驗)*
