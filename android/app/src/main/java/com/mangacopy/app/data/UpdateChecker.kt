@@ -38,10 +38,9 @@ import java.util.concurrent.TimeUnit
 object UpdateChecker {
     private const val API =
         "https://api.github.com/repos/frankiecsy-lab/copymanga-downloader/releases?per_page=10"
-    private const val KV_TS = "upd_ts"
+    private const val KV_DAY = "upd_day"        // 日曆日閘（用戶：「每次打開APP到前景都要CHECK UPDATE，每日一次」）
     private const val KV_LATEST = "upd_latest"
     private const val KV_SEEN = "upd_seen"
-    private const val INTERVAL = 12 * 3600_000L
 
     data class Available(val version: String, val url: String, val apkUrl: String)
 
@@ -119,17 +118,20 @@ object UpdateChecker {
      *  舊格式快取補刷共用。 */
     private fun fetchAndCache(): Latest? {
         val l = fetchLatest() ?: return null
-        db.setMeta(KV_TS, System.currentTimeMillis().toString())
         db.setMeta(KV_LATEST, "${l.ver}|${l.pageUrl}|${l.apkUrl}")
         if (cmp(l.ver, AppConfig.VERSION_NAME) > 0 && db.getMeta(KV_SEEN, "") != l.ver)
             _state.update { Available(l.ver, l.pageUrl, l.apkUrl) }
         return l
     }
 
-    /** App 啟動 effect 調用；background fire-and-forget，失敗靜默（唔滋擾用戶）。 */
+    /** 每次 App 回到前景（Activity ON_RESUME）調用（用戶：「每次打開APP到前景都要
+     *  CHECK UPDATE，每日一次」）：日曆日閘 — 今日未check過先打 API；日_marker 先寫，
+     *  API 失敗当日都唔重複刷網絡（手動檢查仍可随时繞過）。今日已 check →
+     *  restoreFromCache 用快取決定提唔提醒（upd_seen 防重複彈）。 */
     fun onAppStart() {
-        val ts = db.getMeta(KV_TS, "0")?.toLongOrNull() ?: 0L
-        if (System.currentTimeMillis() - ts < INTERVAL) { restoreFromCache(); return }
+        val today = java.time.LocalDate.now().toString()
+        if (db.getMeta(KV_DAY, "") == today) { restoreFromCache(); return }
+        db.setMeta(KV_DAY, today)
         scope.launch {
             try { fetchAndCache() }
             catch (e: Exception) { Log.w("MCUPD", "檢查更新失敗：${e.message}") }
@@ -144,7 +146,7 @@ object UpdateChecker {
         scope.launch {
             try {
                 val l = fetchLatest() ?: error("GitHub 冇帶 APK 嘅 Android 發行版")
-                db.setMeta(KV_TS, System.currentTimeMillis().toString())
+                db.setMeta(KV_DAY, java.time.LocalDate.now().toString())  // 手動 check 亦計做「今日已 check」
                 db.setMeta(KV_LATEST, "${l.ver}|${l.pageUrl}|${l.apkUrl}")
                 if (cmp(l.ver, AppConfig.VERSION_NAME) > 0) {
                     db.setMeta(KV_SEEN, "")

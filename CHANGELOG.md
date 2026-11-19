@@ -1,5 +1,18 @@
 # 更新日誌 (CHANGELOG)
 
+## 2026-11-20 — 改進：KIECOMIC Android v0.3.9（回前景即檢查更新，每日一次）
+
+用戶：「每次打開APP到前景都要CHECK UPDATE，每日一次」：
+
+- 觸發時機：由「进程啟動一次」改成 **App 級 `LifecycleResumeEffect`** — 每次由後台返
+  前景（ON_RESUME）都觸發檢查；掛根 Composable，任何 tab／詳情／閱讀器內返前景都照 check
+- 節流改制：12 小時時間戳（kv `upd_ts`）→ **日曆日閘**（kv `upd_day`=yyyy-MM-dd）：
+  今日未 check 先打 GitHub API；日 marker **先寫** — API 失敗當日都唔重複刷網絡
+  （設置頁手動「檢查」制仍可随时繞過）；今日已 check → 直接用快取決定提唔提醒彈窗
+- 倉庫衛生：v0.3.8 誤提交的臨時 E2E 廢料（`_ui.py`/`_ui.xml`）剔除，
+  `.gitignore` 補 `_ui.*`/`_shot.png`/`_build_*.log`
+- 版本 0.3.9（versionCode 12）
+
 ## 2026-11-20 — 改進：KIECOMIC Android v0.3.8（撤銷卷 TAB 過濾 — 用戶取消需求）
 
 用戶：「如果有分卷或者話，上方一個TAB切換FILTER — 以上取消」。v0.3.7 已上線嘅卷 TAB

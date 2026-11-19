@@ -1,6 +1,7 @@
 package com.mangacopy.app.ui
 
 import androidx.compose.foundation.background
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -96,7 +97,15 @@ fun App() {
         if (favs.isNotEmpty() && !DownloadEngine.isRunning && !ListUpdater.isRunning) {
             ListUpdater.start(favs)
         }
-        UpdateChecker.onAppStart()   // GitHub 檢查更新（12 小時節流；有新版先彈一次）
+    }
+
+    // 檢查更新（用戶 2026-11-20：「每次打開APP到前景都要CHECK UPDATE，每日一次」）：
+    // 掛 App 級 LifecycleResumeEffect — 每次由後台返前景（ON_RESUME）都觸發，
+    // 日曆日閘喺 UpdateChecker.onAppStart 內（今日已 check 即用快取、唔打網）。
+    // 放呢度而唔掛書架：任何 tab／詳情／閱讀器入面返前景都會照 check。
+    LifecycleResumeEffect(Unit) {
+        UpdateChecker.onAppStart()
+        onPauseOrDispose { }
     }
     val backStack by nav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route

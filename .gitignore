@@ -60,3 +60,9 @@ dummy_data.json
 # 6. App 運行時快取（GUI 自動產生、可隨時重新生成，禁止提交）
 # ====================================================================
 data/thumbs/
+
+# 臨時 E2E dump helper（KB#27③ bounds→tap 座標解析，用完即刪）
+_ui.py
+_ui.xml
+_shot.png
+_build_*.log

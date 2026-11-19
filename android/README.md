@@ -5,6 +5,12 @@ Android APK：喺手機/平板 **搜尋瀏覽 → 收藏 → 下載 → 離線�
 **v0.3.2 起品牌統一為「KIECOMIC」**（launcher 名稱／icon／全局標題欄均係，
 LOGO 素材 `res/drawable-nodpi/kie_logo.png`）。
 
+## v0.3.9 重點（2026-11-20）
+
+- 🔁 **回前景即檢查更新（每日一次）**：App 級 `LifecycleResumeEffect` 每次 ON_RESUME 觸發；
+  kv `upd_day` 日曆日閘（失敗當日唔重刷；手動「檢查」照繞過）；舊 `upd_ts` 12 小時節流退役
+- 版本 0.3.9（versionCode 12）
+
 ## v0.3.8 重點（2026-11-20）
 
 - ↩️ **撤銷卷 TAB 過濾**（用戶：「以上取消」）：移除 ChapterGroups＋FilterChip TAB 列，
